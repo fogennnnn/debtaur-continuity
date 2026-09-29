@@ -1,0 +1,10 @@
+# Overwrite-deploy of the continuity console onto the "testdeps2" slot.
+# Deploy: npx wrangler deploy --config deploy/wrangler.toml
+# No Durable Objects, no KV: static assets + one read-only JSON endpoint.
+name = "testdeps2"
+main = "worker.js"
+compatibility_date = "2026-09-29"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"

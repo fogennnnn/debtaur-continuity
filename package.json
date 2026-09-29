@@ -1,0 +1,13 @@
+{
+  "name": "debtaur-continuity",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Policy continuity console: the outgoing owner's signed SOPs keep running the business after the handover.",
+  "scripts": {
+    "demo": "node src/serve.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
