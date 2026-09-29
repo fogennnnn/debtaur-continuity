@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Handover — Beacon Print &amp; Supply keeps running</title>
+<style>
+  :root{
+    --paper:#f6f2e8; --paper2:#efe9da; --card:#fffdf7; --ink:#1c2027; --ink2:#4a5160;
+    --line:#d9d1bf; --brass:#8a6d2b; --green:#1e6f43; --greenbg:#e3f0e7;
+    --red:#a92e24; --redbg:#f7e4e0; --amber:#96690a; --amberbg:#f6ecd2;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --serif:Georgia,"Times New Roman",serif;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);line-height:1.55;
+    background-image:radial-gradient(#e4dcc8 1px,transparent 1px);background-size:22px 22px;}
+  .wrap{max-width:1080px;margin:0 auto;padding:24px 20px 80px}
+  header.top{border-bottom:3px double var(--brass);padding-bottom:14px;margin-bottom:18px}
+  .brand{font-family:var(--serif);font-size:clamp(26px,4vw,38px);margin:0}
+  .brand em{color:var(--brass);font-style:normal}
+  .tag{margin:2px 0 0;color:var(--ink2);font-size:15px;max-width:70ch}
+  .handover{margin:16px 0;background:var(--card);border:1px solid var(--line);border-left:6px solid var(--brass);
+    border-radius:10px;padding:14px 18px;font-size:15px}
+  .handover.signed{border-left-color:var(--green)}
+  .handover button{font:inherit;font-weight:700;border-radius:9px;padding:10px 20px;cursor:pointer;
+    background:var(--ink);color:#f3efe4;border:none;margin-top:10px}
+  .handover button:disabled{opacity:.45;cursor:wait}
+  .roles{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}
+  .role{flex:1 1 280px;background:var(--card);border:1px solid var(--line);border-radius:10px;
+    padding:12px 16px;cursor:pointer;text-align:left;font:inherit;color:var(--ink)}
+  .role.active{border:2px solid var(--brass);background:#fff}
+  .role b{display:block;font-size:15px}
+  .role span{font-size:13px;color:var(--ink2)}
+  .tabs{display:flex;gap:8px;margin:20px 0 0;flex-wrap:wrap}
+  .tab{font:inherit;font-weight:700;padding:10px 20px;border-radius:10px 10px 0 0;cursor:pointer;
+    background:var(--paper2);border:1px solid var(--line);border-bottom:none;color:var(--ink2)}
+  .tab[aria-selected="true"]{background:var(--card);color:var(--ink)}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:0 12px 12px 12px;padding:22px;min-height:300px}
+  .panel h3{font-family:var(--serif);margin-top:0}
+  .case{border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:0 0 14px;background:#fff}
+  .case h4{margin:0 0 4px;font-size:16px}
+  .case .story{font-size:13.5px;color:var(--ink2);margin:0 0 10px}
+  .case .facts{font-family:var(--mono);font-size:12.5px;margin:0 0 10px}
+  .sigs{display:flex;gap:12px;flex-wrap:wrap;margin:8px 0}
+  .sigs label{font-size:13px;display:flex;gap:6px;align-items:center;cursor:pointer}
+  .decide{font:inherit;font-weight:700;border-radius:9px;padding:9px 20px;cursor:pointer;
+    background:var(--ink);color:#f3efe4;border:none}
+  .decide:disabled{opacity:.45;cursor:not-allowed}
+  .stamp{display:inline-block;font-family:var(--serif);font-weight:700;font-size:24px;letter-spacing:.05em;
+    padding:4px 20px;border:4px solid;border-radius:8px;transform:rotate(-3deg);text-transform:uppercase;margin:10px 0}
+  .stamp.allow{color:var(--green);border-color:var(--green);background:var(--greenbg)}
+  .stamp.stop{color:var(--red);border-color:var(--red);background:var(--redbg)}
+  .stamp.owner{color:var(--amber);border-color:var(--amber);background:var(--amberbg)}
+  .verdict{font-size:14.5px;max-width:64ch}
+  .issue{margin-top:10px;border:2px dashed var(--brass);border-radius:10px;padding:10px 14px;background:#fff;font-size:13.5px}
+  .issue h5{margin:0 0 4px;font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--brass)}
+  .dash{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+  .stat{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+  .stat .k{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--brass)}
+  .stat .v{font-family:var(--serif);font-size:30px}
+  .policy{border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:0 0 14px;background:#fff}
+  .policy h4{margin:0 0 4px}
+  .policy .meta{font-family:var(--mono);font-size:12px;color:var(--ink2)}
+  table.ledger{width:100%;border-collapse:collapse;font-size:13px}
+  table.ledger th{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+    text-align:left;color:var(--ink2);border-bottom:2px solid var(--line);padding:6px}
+  table.ledger td{border-bottom:1px solid var(--line);padding:8px 6px;vertical-align:top}
+  .hash{font-family:var(--mono);font-size:12px;word-break:break-all}
+  .pill{display:inline-block;font-family:var(--mono);font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 10px}
+  .pill.allow{background:var(--greenbg);color:var(--green)} .pill.stop{background:var(--redbg);color:var(--red)}
+  .pill.owner{background:var(--amberbg);color:var(--amber)} .pill.note{background:var(--paper2);color:var(--ink2)}
+  footer{margin-top:26px;color:var(--ink2);font-size:13px;font-family:var(--mono)}
+  .err{background:var(--redbg);border:2px solid var(--red);border-radius:10px;padding:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1 class="brand">Hand<em>over</em></h1>
+    <p class="tag" id="tagline">Beacon Print &amp; Supply keeps running after Lena leaves.</p>
+  </header>
+
+  <div class="handover" id="handoverBox"></div>
+
+  <div class="roles" id="roleBar" aria-label="Acting role"></div>
+
+  <div class="tabs" role="tablist" aria-label="Console views">
+    <button class="tab" role="tab" id="tab-queue" aria-selected="true" data-tab="queue">Case queue</button>
+    <button class="tab" role="tab" id="tab-dash" aria-selected="false" data-tab="dash">Business pulse</button>
+    <button class="tab" role="tab" id="tab-book" aria-selected="false" data-tab="book">Policy book</button>
+    <button class="tab" role="tab" id="tab-ledger" aria-selected="false" data-tab="ledger">Record book</button>
+  </div>
+  <section class="panel" id="panel" role="tabpanel"></section>
+
+  <footer id="footer"></footer>
+</div>
+<script type="module" src="/src/app.js"></script>
+</body>
+</html>

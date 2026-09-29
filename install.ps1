@@ -17,12 +17,12 @@ if ($major -lt 22) {
   Write-Output "Node $ver found, but this demo needs Node 22+. Update Node, then re-run."
   exit 1
 }
-Write-Output "Node $ver OK — zero dependencies to install."
+Write-Output "Node $ver OK - zero dependencies to install."
 
 Write-Output "Smoke test: evaluating all 8 continuity cases..."
 $out = node scripts/smoke.mjs 2>&1 | Out-String
 if ($out -notmatch "8/8 cases as expected") {
-  Write-Output "SMOKE TEST FAILED — output was:"
+  Write-Output "SMOKE TEST FAILED - output was:"
   Write-Output $out
   exit 1
 }
