@@ -1,0 +1,81 @@
+{
+  "sop_id": "SOP-COM-01",
+  "title": "Customers and vendors hear from us, not from Lena",
+  "demo_story": "Clients call Lena's mobile. Without a named successor and a made introduction, relationships walk out the door with her.",
+  "version": {
+    "id": "sop_com_01_v1.0.0",
+    "version_hash": "sha256:e92cf8530f65c7608a3829ed02e6cd4f48a0100bf68d9dceb8228d8fc4a82f7a",
+    "effective_date": "2026-05-01",
+    "signed_by": "outgoing-owner"
+  },
+  "issue_prefix": "ISS-COM-2026",
+  "premises": [
+    {
+      "id": "PREMISE_COM_01_SUCCESSOR_NAMED",
+      "description": "A successor contact is named for the relationship.",
+      "evaluator_key": "text-present",
+      "params": {
+        "field": "successor_contact"
+      },
+      "escalate_on": []
+    },
+    {
+      "id": "PREMISE_COM_02_INTRO_MADE",
+      "description": "The introduction to the successor must already be made.",
+      "evaluator_key": "value-in-allowlist",
+      "params": {
+        "field": "introduction",
+        "values": [
+          true
+        ]
+      },
+      "escalate_on": []
+    },
+    {
+      "id": "PREMISE_COM_03_RESPONSE_PROMISE",
+      "description": "The shop promises a reply within one to two days.",
+      "evaluator_key": "value-in-allowlist",
+      "params": {
+        "field": "response_days",
+        "values": [
+          1,
+          2
+        ]
+      },
+      "escalate_on": []
+    },
+    {
+      "id": "PREMISE_COM_04_SENDER_SIG",
+      "description": "The handover note needs the sender signature.",
+      "evaluator_key": "signature-present",
+      "params": {
+        "signer": "sender",
+        "label": "sender"
+      },
+      "escalate_on": []
+    }
+  ],
+  "signers": [
+    {
+      "key": "sender",
+      "label": "Sender"
+    }
+  ],
+  "input_fields": [
+    {
+      "key": "successor_contact",
+      "label": "Successor contact name",
+      "type": "text"
+    },
+    {
+      "key": "introduction",
+      "label": "Introduction already made?",
+      "type": "yesno"
+    },
+    {
+      "key": "response_days",
+      "label": "Reply promise (days)",
+      "type": "amount"
+    }
+  ]
+}

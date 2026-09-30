@@ -27,6 +27,7 @@
  *   date-within-validity              { date_field, window_key }
  *   signature-required-when           { when_field, when_value, signer, label? }
  *   require-all                       { checks: [{ evaluator_key, params? }], success_detail? }
+ *   minimum-floor                     { field, floor, label? }
  * `list`, `threshold_field` and `window_key` resolve against the ruleset's
  * own top-level data (or its `data` object), so thresholds and allowlists
  * stay signed content, not code.
@@ -302,6 +303,34 @@ const evaluators = {
       detail: params?.success_detail ?? `all ${checks.length} required checks satisfied.`,
       reason: "",
     };
+  },
+  "minimum-floor"(request, params) {
+    const f = params?.field;
+    const floor = typeof params?.floor === "number" ? params.floor : null;
+    const label = params?.label ?? f;
+    const v = fieldOf(request, f);
+    if (floor === null) {
+      return {
+        ok: false,
+        detail: `floor for '${f}' is not configured as a number.`,
+        reason: `Policy floor '${f}' is not a number; cannot evaluate. Refusing rather than guessing.`,
+      };
+    }
+    if (typeof v !== "number" || !Number.isFinite(v)) {
+      return {
+        ok: false,
+        detail: `${f} missing or not numeric.`,
+        reason: `A numeric '${f}' is required; none was provided.`,
+      };
+    }
+    if (v < floor) {
+      return {
+        ok: false,
+        detail: `${f}=${v} is below the floor of ${floor}.`,
+        reason: `'${label}' ${v} is below the required floor of ${floor}.`,
+      };
+    }
+    return { ok: true, detail: `${f}=${v} meets the floor of ${floor}.`, reason: "" };
   },
 };
 

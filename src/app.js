@@ -26,7 +26,7 @@ async function load() {
     const data = await res.json();
     S.company = data.company; S.succession = data.succession;
     S.roles = data.roles; S.cases = data.cases;
-    const files = ["client-onboarding.json", "expense-signoff.json", "hiring-approval.json", "vendor-payment.json"];
+    const files = ["client-comms.json", "client-onboarding.json", "decision-thaw.json", "expense-signoff.json", "hiring-approval.json", "process-currency.json", "seat-cover.json", "vendor-payment.json", "weekly-numbers.json"];
     for (const f of files) {
       const r = await fetch(`/src/rules/${f}`);
       if (!r.ok) throw new Error(`missing ruleset ${f}`);
@@ -79,7 +79,7 @@ function refuseUntrustedRulesets() {
 
 const role = () => S.roles.find((r) => r.key === S.roleKey) ?? S.roles[0];
 const rulesFor = (c) => Object.values(S.rulesets).find((r) => r.sop_id === policyOf(c)) ?? null;
-const policyOf = (c) => ({ "expense-signoff": "SOP-FIN-01", "client-onboarding": "SOP-ONB-01", "hiring-approval": "SOP-HIRE-01", "vendor-payment": "SOP-PAY-01" }[c.policy]);
+const policyOf = (c) => ({ "expense-signoff": "SOP-FIN-01", "client-onboarding": "SOP-ONB-01", "hiring-approval": "SOP-HIRE-01", "vendor-payment": "SOP-PAY-01", "seat-cover": "SOP-SEAT-01", "decision-thaw": "SOP-THAW-01", "weekly-numbers": "SOP-NUM-01", "process-currency": "SOP-DOC-01", "client-comms": "SOP-COM-01" }[c.policy]);
 const decided = () => S.cases.filter((c) => S.decisions[c.id]);
 
 function renderAll() {
@@ -176,6 +176,9 @@ function renderPanel() {
   else if (S.tab === "dash") renderDash();
   else if (S.tab === "book") renderBook();
   else if (S.tab === "new") renderNewCase();
+  else if (S.tab === "cont") renderCont();
+  else if (S.tab === "guard") renderGuard();
+  else if (S.tab === "play") renderPlaybook();
   else renderLedger();
 }
 
@@ -702,6 +705,156 @@ function decideNewCase(rules, st) {
   const entry = appendDecision(result, req);
   st.result = result; st.entry = entry;
   renderPanel();
+}
+
+const CONT_POLICIES = ["SOP-SEAT-01", "SOP-THAW-01", "SOP-NUM-01", "SOP-DOC-01", "SOP-COM-01"];
+
+const CONT_CASES = {
+  "SOP-SEAT-01": ["SEAT-01"],
+  "SOP-THAW-01": ["THAW-02"],
+  "SOP-NUM-01": ["NUM-01", "NUM-02"],
+  "SOP-DOC-01": ["DOC-02"],
+  "SOP-COM-01": ["COM-01"],
+};
+
+function wireCases(root) {
+  root.querySelectorAll("input[type=checkbox]").forEach((box) => {
+    box.onchange = () => {
+      const c = S.cases.find((x) => x.id === box.dataset.case);
+      if (!c) return;
+      S.decisions[c.id] = S.decisions[c.id] ?? { sigs: { ...c.request.signatures } };
+      S.decisions[c.id].sigs[box.dataset.sig] = box.checked;
+    };
+  });
+  root.querySelectorAll("[data-decide]").forEach((btn) => {
+    btn.onclick = () => decide(btn.dataset.decide);
+  });
+}
+
+function renderCont() {
+  const p = $("panel");
+  const head = `<h3>Continuity policies - running without Lena</h3>
+    <p>Five signed policies cover seats, speed, numbers, write-ups, and relationships. Each case below runs live against its policy.</p>`;
+  const blocks = CONT_POLICIES.map((sopId) => {
+    const r = S.rulesets[sopId];
+    if (!r) return "";
+    const cards = (CONT_CASES[sopId] ?? []).map((id) => {
+      const c = S.cases.find((x) => x.id === id);
+      return c ? caseCard(c) : "";
+    }).join("");
+    return `<div class="policy"><h4>${esc(r.title)}</h4>
+      <p style="font-size:13.5px;color:var(--ink2);margin:4px 0">${esc(r.demo_story ?? "")}</p>
+      <p class="meta">signed: ${esc(r.version?.signed_by ?? "?")} · fingerprint ${esc(short(r.version?.version_hash))} · signers: ${esc((r.signers ?? []).map((s) => s.label).join(" | "))}</p></div>${cards}`;
+  }).join("");
+  p.innerHTML = head + blocks;
+  wireCases(p);
+}
+
+const GUARDS = [
+  { sop: "SOP-FIN-01", label: "Spend limit", verb: "Try raising it",
+    get: (r) => r.threshold, set: (r, v) => { r.threshold = v; },
+    fmt: (v) => `$${Number(v).toLocaleString("en-US")}`, attempt: 50000 },
+  { sop: "SOP-PAY-01", label: "Payout limit", verb: "Try raising it",
+    get: (r) => r.payment_threshold, set: (r, v) => { r.payment_threshold = v; },
+    fmt: (v) => `$${Number(v).toLocaleString("en-US")}`, attempt: 100000 },
+  { sop: "SOP-HIRE-01", label: "Offer line", verb: "Try raising it",
+    get: (r) => r.offer_threshold, set: (r, v) => { r.offer_threshold = v; },
+    fmt: (v) => `$${Number(v).toLocaleString("en-US")}`, attempt: 300000 },
+  { sop: "SOP-THAW-01", label: "Discount line", verb: "Try raising it",
+    get: (r) => r.discount_line, set: (r, v) => { r.discount_line = v; },
+    fmt: (v) => `${v}%`, attempt: 25 },
+  { sop: "SOP-NUM-01", label: "Cash floor", verb: "Try lowering it",
+    get: (r) => premFloor(r, "PREMISE_NUM_01_CASH_FLOOR"), setPrem: ["PREMISE_NUM_01_CASH_FLOOR", 4],
+    fmt: (v) => `${v} weeks`, attempt: 4 },
+  { sop: "SOP-NUM-01", label: "Margin floor", verb: "Try lowering it",
+    get: (r) => premFloor(r, "PREMISE_NUM_02_MARGIN_FLOOR"), setPrem: ["PREMISE_NUM_02_MARGIN_FLOOR", 8],
+    fmt: (v) => `${v}%`, attempt: 8 },
+];
+
+function premFloor(rules, premiseId) {
+  const p = (rules?.premises ?? []).find((x) => x?.id === premiseId);
+  const v = p?.params?.floor;
+  return typeof v === "number" ? v : null;
+}
+
+function tryRaiseGuard(gi) {
+  const g = GUARDS[gi];
+  const rules = S.rulesets[g.sop];
+  if (!rules) return;
+  const altered = JSON.parse(JSON.stringify(rules));
+  if (g.set) g.set(altered, g.attempt);
+  else if (g.setPrem) {
+    const p = (altered.premises ?? []).find((x) => x?.id === g.setPrem[0]);
+    if (!p) return;
+    p.params = { ...(p.params ?? {}), floor: g.setPrem[1] };
+  }
+  const recomputed = "sha256:" + sha256Hex(canonicalRulesetContent(altered));
+  const stored = String(altered.version?.version_hash ?? "");
+  const issueId = nextIssueId(rules?.issue_prefix ?? "ISS-2026");
+  const reason = `Edited draft refused: stored ${stored} does not match recomputed ${recomputed}. Only a fresh signature from the owner changes the policy.`;
+  const result = {
+    status: "REFUSED", sop_id: rules.sop_id, policy_title: rules.title,
+    action_id: `GUARD-${rules.sop_id}-${gi}`, actor_id: role().actor_id,
+    rule_version_hash: stored, timestamp: new Date().toISOString(), derivation: [reason],
+    refusal_details: { missing_premise_id: "RULESET_INTEGRITY", reason,
+      policy_issue: { id: issueId, title: `Edited draft refused - ${rules.title}`, missing_premise: "RULESET_INTEGRITY", context: { stored, recomputed } } },
+  };
+  const entry = appendDecision(result);
+  S.guard = S.guard ?? {};
+  S.guard[`${g.sop}-${g.label}`] = { result, entry };
+  persistSnapshot();
+  renderPanel();
+}
+
+function renderGuard() {
+  const p = $("panel");
+  const rows = GUARDS.map((g, gi) => {
+    const rules = S.rulesets[g.sop];
+    if (!rules) return "";
+    const cur = g.get(rules);
+    const recomputed = "sha256:" + sha256Hex(canonicalRulesetContent(rules));
+    const match = String(rules?.version?.version_hash ?? "") === recomputed;
+    const done = (S.guard ?? {})[`${g.sop}-${g.label}`];
+    const out = !done ? "" : `<p class="verdict">Stopped - edited draft refused, both fingerprints shown in the record book.</p>`;
+    return `<div class="case"><h4>${esc(g.label)} - currently ${esc(g.fmt(cur))}</h4>
+      <p class="story">${esc(rules.title)} · signed fingerprint ${match ? "matches" : "MISMATCH"}</p>
+      <button class="decide" data-guard="${gi}">${esc(g.verb)} (attempt ${esc(g.fmt(g.attempt))})</button>${out}</div>`;
+  }).join("");
+  const numDecided = (S.decisions["NUM-01"] || S.decisions["NUM-02"])
+    ? "A weekly review has been decided - see the case queue."
+    : "No weekly review decided yet - run NUM-01 or NUM-02 in the continuity tab.";
+  p.innerHTML = `<h3>Profit guardrails - the controls that hold margin</h3>
+    <p>Limits and floors live in signed policies. Anyone can attempt to move one; the attempt is refused, both fingerprints shown, and the attempt itself goes into the record. ${esc(numDecided)}</p>` + rows;
+  p.querySelectorAll("[data-guard]").forEach((b) => { b.onclick = () => tryRaiseGuard(Number(b.dataset.guard)); });
+}
+
+const PLAYBOOKS = [
+  { key: "planned", title: "Planned exit - Lena retires on schedule",
+    hours4: "Lena signs the succession pack; Maya and Tomas confirm their seats in writing; the signed record opens.",
+    hours48: "First cases decided under the inherited policies; weekly numbers reviewed; vendors learn successor names.",
+    elevated: "Maya decides operations up to $10,000; Tomas moves money inside policy. Neither can raise any limit.",
+    full: "Routine restocks, payroll, standard pricing, approved payouts, clean intakes.",
+    frozen: "New debt, price changes, hires above the line, discounts above the line - owner signature required.",
+    ledger: "Pack signatures, then every decision chained in order. Nothing silent." },
+  { key: "sudden", title: "Sudden disappearance - Lena unreachable today",
+    hours4: "Declare a 72-hour absence; Maya covers operations; payouts above $10,000 wait - no override exists to give.",
+    hours48: "Emergency weekly-numbers review; every vendor gets a successor name; undocumented processes inventoried.",
+    elevated: "Same $10,000 ceiling. Absence changes who decides, never how much anyone may move.",
+    full: "Routine work, payroll, in-policy payouts, clean intakes with all checks green.",
+    frozen: "Everything the policies mark owner-only stays frozen until a countersigned owner returns.",
+    ledger: "Absence declaration, cover acceptance, then every decision chained in order. Nothing silent." },
+];
+
+function renderPlaybook() {
+  const cards = PLAYBOOKS.map((s) => `<div class="case"><h4>${esc(s.title)}</h4>
+    <p class="story"><strong>First 4 hours:</strong> ${esc(s.hours4)}</p>
+    <p class="story"><strong>First 48 hours:</strong> ${esc(s.hours48)}</p>
+    <p class="story"><strong>Elevated seats:</strong> ${esc(s.elevated)}</p>
+    <p class="story"><strong>Full speed:</strong> ${esc(s.full)}</p>
+    <p class="story"><strong>Frozen:</strong> ${esc(s.frozen)}</p>
+    <p class="story"><strong>Record:</strong> ${esc(s.ledger)}</p></div>`).join("");
+  $("panel").innerHTML = `<h3>Absence playbook - two ways Lena can be gone</h3>
+    <p>The same policies govern both. The difference is who is missing, never which rules apply.</p>${cards}`;
 }
 
 function renderLedger() {

@@ -14,6 +14,11 @@ const files = {
   "client-onboarding": "client-onboarding.json",
   "hiring-approval": "hiring-approval.json",
   "vendor-payment": "vendor-payment.json",
+  "seat-cover": "seat-cover.json",
+  "decision-thaw": "decision-thaw.json",
+  "weekly-numbers": "weekly-numbers.json",
+  "process-currency": "process-currency.json",
+  "client-comms": "client-comms.json",
 };
 
 let pass = 0;

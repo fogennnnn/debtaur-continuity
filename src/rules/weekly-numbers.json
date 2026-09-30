@@ -1,0 +1,92 @@
+{
+  "sop_id": "SOP-NUM-01",
+  "title": "The weekly numbers that must stay healthy",
+  "demo_story": "The week Lena retires, cash sits at 6 weeks of runway and nobody is obliged to tell anyone - red numbers nobody owns.",
+  "version": {
+    "id": "sop_num_01_v1.0.0",
+    "version_hash": "sha256:127c72fda40c89074baa5780120d18f28ac077b8e32027f50b6875fd7c91e877",
+    "effective_date": "2026-05-01",
+    "signed_by": "finance-lead"
+  },
+  "issue_prefix": "ISS-NUM-2026",
+  "premises": [
+    {
+      "id": "PREMISE_NUM_01_CASH_FLOOR",
+      "description": "Cash runway must hold at 8 weeks or more.",
+      "evaluator_key": "minimum-floor",
+      "params": {
+        "field": "cash_weeks",
+        "floor": 8,
+        "label": "cash runway"
+      },
+      "escalate_on": [
+        "owner"
+      ]
+    },
+    {
+      "id": "PREMISE_NUM_02_MARGIN_FLOOR",
+      "description": "Gross margin must hold at 15 percent or more.",
+      "evaluator_key": "minimum-floor",
+      "params": {
+        "field": "margin_pct",
+        "floor": 15,
+        "label": "gross margin"
+      },
+      "escalate_on": [
+        "owner"
+      ]
+    },
+    {
+      "id": "PREMISE_NUM_03_NO_SUSTAINED_RED",
+      "description": "Red numbers two weeks running force owner review.",
+      "evaluator_key": "value-in-allowlist",
+      "params": {
+        "field": "red_weeks",
+        "values": [
+          0,
+          1
+        ]
+      },
+      "escalate_on": [
+        "owner"
+      ]
+    },
+    {
+      "id": "PREMISE_NUM_04_REVIEWER_SIGNED",
+      "description": "The weekly review needs the numbers reviewer signature.",
+      "evaluator_key": "signature-present",
+      "params": {
+        "signer": "reviewer",
+        "label": "numbers reviewer"
+      },
+      "escalate_on": []
+    }
+  ],
+  "signers": [
+    {
+      "key": "reviewer",
+      "label": "Numbers reviewer"
+    },
+    {
+      "key": "owner",
+      "label": "Owner (red numbers)"
+    }
+  ],
+  "input_fields": [
+    {
+      "key": "cash_weeks",
+      "label": "Cash runway (weeks)",
+      "type": "amount"
+    },
+    {
+      "key": "margin_pct",
+      "label": "Gross margin (percent)",
+      "type": "amount"
+    },
+    {
+      "key": "red_weeks",
+      "label": "Consecutive red weeks",
+      "type": "amount"
+    }
+  ]
+}

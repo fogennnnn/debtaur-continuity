@@ -1,0 +1,97 @@
+{
+  "sop_id": "SOP-THAW-01",
+  "title": "What keeps full speed and what waits for the owner",
+  "demo_story": "Routine work must fly while big commitments wait - the paper process either freezes everything or nothing.",
+  "version": {
+    "id": "sop_thaw_01_v1.0.0",
+    "version_hash": "sha256:1065bb4b85ae497760d6f16c46e1f5d12435cc323a087139240c815f578db893",
+    "effective_date": "2026-05-01",
+    "signed_by": "outgoing-owner"
+  },
+  "issue_prefix": "ISS-THAW-2026",
+  "discount_line": 10,
+  "premises": [
+    {
+      "id": "PREMISE_THAW_01_CLASS_LISTED",
+      "description": "The decision states whether it is routine or frozen-class work.",
+      "evaluator_key": "value-in-allowlist",
+      "params": {
+        "field": "decision_class",
+        "values": [
+          "routine",
+          "frozen"
+        ]
+      },
+      "escalate_on": []
+    },
+    {
+      "id": "PREMISE_THAW_02_FROZEN_NEEDS_OWNER",
+      "description": "Frozen-class work needs the owner before anyone acts.",
+      "evaluator_key": "signature-required-when",
+      "params": {
+        "when_field": "decision_class",
+        "when_value": "frozen",
+        "signer": "owner",
+        "label": "owner"
+      },
+      "escalate_on": [
+        "executor"
+      ]
+    },
+    {
+      "id": "PREMISE_THAW_03_DISCOUNT_WITHIN_LINE",
+      "description": "Discounts above 10 percent need the owner.",
+      "evaluator_key": "amount-over-threshold-needs-override",
+      "params": {
+        "amount_field": "discount_pct",
+        "threshold_field": "discount_line",
+        "override_signer": "owner",
+        "override_label": "owner"
+      },
+      "escalate_on": [
+        "executor"
+      ]
+    },
+    {
+      "id": "PREMISE_THAW_04_EXECUTOR_SIG",
+      "description": "Doing the work needs the executor signature over the cleared state.",
+      "evaluator_key": "signature-present",
+      "params": {
+        "signer": "executor",
+        "label": "executor"
+      },
+      "escalate_on": []
+    }
+  ],
+  "signers": [
+    {
+      "key": "executor",
+      "label": "Executor"
+    },
+    {
+      "key": "owner",
+      "label": "Owner (frozen work, big discounts)"
+    }
+  ],
+  "input_fields": [
+    {
+      "key": "decision_class",
+      "label": "Decision class",
+      "type": "choice",
+      "choices": [
+        "routine",
+        "frozen"
+      ]
+    },
+    {
+      "key": "decision_detail",
+      "label": "What is being done",
+      "type": "text"
+    },
+    {
+      "key": "discount_pct",
+      "label": "Discount percent (0 if none)",
+      "type": "amount"
+    }
+  ]
+}

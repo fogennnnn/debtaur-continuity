@@ -1,0 +1,82 @@
+{
+  "sop_id": "SOP-DOC-01",
+  "title": "Core processes written down and current",
+  "demo_story": "Half the shop know-how lives in Lena's head - unsigned or stale write-ups block the work that depends on them.",
+  "version": {
+    "id": "sop_doc_01_v1.0.0",
+    "version_hash": "sha256:33ae69260766de8198975c2b8b4a6e55dcd09948a63b2c69599eacadb99b3994",
+    "effective_date": "2026-05-01",
+    "signed_by": "operations-lead"
+  },
+  "issue_prefix": "ISS-DOC-2026",
+  "currency_window": {
+    "from": "2026-01-01",
+    "to": "2026-12-31"
+  },
+  "premises": [
+    {
+      "id": "PREMISE_DOC_01_PROCESS_NAMED",
+      "description": "The review names the core process.",
+      "evaluator_key": "text-present",
+      "params": {
+        "field": "process_name"
+      },
+      "escalate_on": []
+    },
+    {
+      "id": "PREMISE_DOC_02_DOCUMENTED",
+      "description": "The process must be written down.",
+      "evaluator_key": "value-in-allowlist",
+      "params": {
+        "field": "documented",
+        "values": [
+          true
+        ]
+      },
+      "escalate_on": []
+    },
+    {
+      "id": "PREMISE_DOC_03_REVIEW_CURRENT",
+      "description": "The write-up must have been reviewed inside the current year.",
+      "evaluator_key": "date-within-validity",
+      "params": {
+        "date_field": "review_date",
+        "window_key": "currency_window"
+      },
+      "escalate_on": []
+    },
+    {
+      "id": "PREMISE_DOC_04_OWNER_SIG",
+      "description": "The review needs the process owner signature.",
+      "evaluator_key": "signature-present",
+      "params": {
+        "signer": "process_owner",
+        "label": "process owner"
+      },
+      "escalate_on": []
+    }
+  ],
+  "signers": [
+    {
+      "key": "process_owner",
+      "label": "Process owner"
+    }
+  ],
+  "input_fields": [
+    {
+      "key": "process_name",
+      "label": "Core process name",
+      "type": "text"
+    },
+    {
+      "key": "documented",
+      "label": "Written down?",
+      "type": "yesno"
+    },
+    {
+      "key": "review_date",
+      "label": "Last review date (YYYY-MM-DD)",
+      "type": "date"
+    }
+  ]
+}
