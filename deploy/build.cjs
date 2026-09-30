@@ -18,7 +18,7 @@ function copy(srcRel, destRel) {
 
 fs.rmSync(pub, { recursive: true, force: true });
 copy("index.html", "index.html");
-for (const f of ["app.js", "engine.js", "ledger.js", "company.js"]) {
+for (const f of ["app.js", "engine.js", "ledger.js", "company.js", "integrity.js"]) {
   copy(path.join("src", f), path.join("src", f));
 }
 for (const f of fs.readdirSync(path.join(root, "src", "rules")).filter((x) => x.endsWith(".json")).sort()) {
