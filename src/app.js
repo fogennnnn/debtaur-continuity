@@ -4,7 +4,7 @@
  * comes from /api/company and the rulesets. Zero dependencies.
  */
 import { evaluateAction, nextIssueId } from "/src/engine.js";
-import { appendDecision, verifyChain, getEntries, sha256Hex } from "/src/ledger.js";
+import { appendDecision, verifyChain, getEntries, sha256Hex, importEntries, clearLedger } from "/src/ledger.js";
 import { canonicalRulesetContent } from "/src/integrity.js";
 
 const $ = (id) => document.getElementById(id);
@@ -34,6 +34,15 @@ async function load() {
       S.rulesets[rules.sop_id] = rules;
     }
     if (refuseUntrustedRulesets()) return;
+    const snapState = restoreSnapshot();
+    if (snapState === "broken" || snapState === "corrupt") {
+      $("panel").innerHTML = `<div class="err"><strong>Saved record failed its own check.</strong><br>The record stored in this browser no longer verifies - it may have been edited outside the console. The console starts fresh so every new answer stays trustworthy.</div>`;
+      try { localStorage.removeItem(SNAP_KEY); } catch (e) {}
+      clearLedger();
+      S.decisions = {}; S.versions = null; S.signed = false;
+      renderAll();
+      return;
+    }
     renderAll();
   } catch (e) {
     $("panel").innerHTML = `<div class="err"><strong>The console could not load.</strong><br>${esc(e?.message ?? e)}<br><br>Run <span class="hash">npm run demo</span>, then open the printed URL.</div>`;
@@ -131,10 +140,42 @@ function renderTabs() {
   });
 }
 
+const SNAP_KEY = "debtaur-continuity-v1";
+
+function persistSnapshot() {
+  try {
+    localStorage.setItem(SNAP_KEY, JSON.stringify({
+      ledger: getEntries(), decisions: S.decisions, versions: S.versions ?? null, signed: S.signed,
+      rulesets: S.rulesets,
+    }));
+  } catch (e) { /* private mode: session-only record */ }
+}
+
+function restoreSnapshot() {
+  let snap = null;
+  try { snap = JSON.parse(localStorage.getItem(SNAP_KEY) ?? "null"); } catch (e) { snap = null; }
+  if (!snap || !Array.isArray(snap.ledger)) return "fresh";
+  try { importEntries(snap.ledger); } catch (e) { return "corrupt"; }
+  if (!verifyChain().ok) return "broken";
+  S.decisions = snap.decisions && typeof snap.decisions === "object" ? snap.decisions : {};
+  S.versions = snap.versions ?? null;
+  S.signed = snap.signed === true;
+  if (snap.rulesets && typeof snap.rulesets === "object") {
+    for (const rules of Object.values(snap.rulesets)) {
+      const recomputed = `sha256:${sha256Hex(canonicalRulesetContent(rules))}`;
+      if (String(rules?.version?.version_hash ?? "") !== recomputed) return "corrupt";
+    }
+    for (const [sopId, rules] of Object.entries(snap.rulesets)) S.rulesets[sopId] = rules;
+  }
+  return "restored";
+}
+
 function renderPanel() {
+  persistSnapshot();
   if (S.tab === "queue") renderQueue();
   else if (S.tab === "dash") renderDash();
   else if (S.tab === "book") renderBook();
+  else if (S.tab === "new") renderNewCase();
   else renderLedger();
 }
 
@@ -341,14 +382,326 @@ function renderDash() {
     <p style="margin-top:14px;max-width:64ch">The business ran ${done.length} decisions without Lena. ${esc.length === 0 ? "Nothing needed her override." : `${esc.length} case${esc.length === 1 ? "" : "s"} wait${esc.length === 1 ? "s" : ""} on an owner decision — each one named, none of them silent.`} That is what a sellable business looks like: profitable, documented, and no longer dependent on any one person.</p>`;
 }
 
+function currentVersion(sopId) {
+  const v = S.versions?.[sopId];
+  return v ?? { n: "1.0.0", note: "original signed version" };
+}
+
+function thresholdFieldFor(rules) {
+  if (typeof rules?.threshold === "number") return "threshold";
+  if (typeof rules?.offer_threshold === "number") return "offer_threshold";
+  if (typeof rules?.payment_threshold === "number") return "payment_threshold";
+  return null;
+}
+
+function bumpVersion(id) {
+  const m = String(id).match(/v(\d+)\.(\d+)\.(\d+)$/);
+  if (!m) return `${id}-v2`;
+  return id.replace(/v\d+\.\d+\.\d+$/, `v${m[1]}.${Number(m[2]) + 1}.0`);
+}
+
+function doAmend(sopId) {
+  const rules = S.rulesets[sopId];
+  if (!rules) return;
+  const tf = thresholdFieldFor(rules);
+  const numEl = document.getElementById(`am-th-${sopId}`);
+  const okEl = document.getElementById(`am-ok-${sopId}`);
+  const flag = document.getElementById(`amflag-${sopId}`);
+  const getNum = () => (tf && numEl ? Number(numEl.value) : NaN);
+  const n = getNum();
+  if (!okEl || !okEl.checked) {
+    if (flag) flag.textContent = "Amendments need the owner countersignature - tick the box and try again.";
+    return;
+  }
+  if (tf && !(typeof n === "number" && Number.isFinite(n) && n > 0)) {
+    if (flag) flag.textContent = "Enter a positive number for the new limit.";
+    return;
+  }
+  const next = JSON.parse(JSON.stringify(rules));
+  if (tf) next[tf] = n;
+  next.version = {
+    ...next.version,
+    id: bumpVersion(next.version?.id ?? "v1.0.0"),
+    effective_date: todayStr(),
+    signed_by: `owner countersignature via ${role().actor_id}`,
+  };
+  next.version.version_hash = `sha256:${sha256Hex(canonicalRulesetContent(next))}`;
+  const stamp = new Date().toISOString();
+  appendDecision({
+    status: "SUPERSEDED", sop_id: sopId, policy_title: rules.title,
+    action_id: `AMEND-${sopId}`, actor_id: role().actor_id,
+    rule_version_hash: rules.version?.version_hash ?? "unknown", timestamp: stamp,
+    derivation: [`Version ${rules.version?.id} superseded by owner-countersigned amendment.`],
+  });
+  appendDecision({
+    status: "SIGNED", sop_id: sopId, policy_title: next.title,
+    action_id: `AMEND-${sopId}-NEW`, actor_id: role().actor_id,
+    rule_version_hash: next.version.version_hash, timestamp: stamp,
+    derivation: [`Version ${next.version.id} signed into force; cases from here run under it.`],
+  });
+  S.rulesets[sopId] = next;
+  S.versions = S.versions ?? {};
+  S.versions[sopId] = { n: next.version.id, note: tf ? `limit now $${Number(n).toLocaleString("en-US")}` : "renewed signature, rules unchanged" };
+  renderPanel();
+}
+
 function renderBook() {
-  $("panel").innerHTML = `<h3>Policy book — what Lena left behind</h3>
-    <p>Four signed policies. Every case in the queue answers to one of them.</p>` +
-    Object.values(S.rulesets).map((r) => `<div class="policy">
+  const cards = Object.values(S.rulesets).map((r) => {
+    const ver = currentVersion(r.sop_id);
+    const tf = thresholdFieldFor(r);
+    const cur = tf ? r[tf] : null;
+    const amend = tf
+      ? `<div style="margin-top:10px;font-size:13px;border-top:1px solid var(--line);padding-top:10px">
+        <strong>Amend this policy</strong> (owner countersignature required)<br>
+        <label>New limit $ <input id="am-th-${r.sop_id}" type="number" min="1" step="any" value="${cur}" style="width:130px"></label>
+        <label style="margin-left:10px"><input id="am-ok-${r.sop_id}" type="checkbox"> Owner countersigns</label>
+        <button class="decide" id="am-go-${r.sop_id}" style="margin-left:10px">Sign new version</button>
+        <span id="amflag-${r.sop_id}" style="margin-left:10px"></span></div>`
+      : `<div style="margin-top:10px;font-size:13px;border-top:1px solid var(--line);padding-top:10px">
+        <strong>Renew this policy</strong> (owner countersignature required)<br>
+        <label><input id="am-ok-${r.sop_id}" type="checkbox"> Owner countersigns a fresh signature, rules unchanged</label>
+        <button class="decide" id="am-go-${r.sop_id}" style="margin-left:10px">Sign new version</button>
+        <span id="amflag-${r.sop_id}" style="margin-left:10px"></span></div>`;
+    return `<div class="policy">
       <h4>${esc(r.title)}</h4>
       <p style="font-size:13.5px;color:var(--ink2);margin:4px 0">${esc(r.demo_story ?? "")}</p>
-      <p class="meta">signed: ${esc(r.version?.signed_by ?? "?")} · effective ${esc(r.version?.effective_date ?? "?")} · fingerprint ${esc(short(r.version?.version_hash))} · ${(r.premises ?? []).length} requirements · signers: ${esc((r.signers ?? []).map((s) => s.label).join(" · "))}</p>
-    </div>`).join("");
+      <p class="meta">running version ${esc(ver.n)} (${esc(ver.note)}) · signed: ${esc(r.version?.signed_by ?? "?")} · effective ${esc(r.version?.effective_date ?? "?")} · fingerprint ${esc(short(r.version?.version_hash))} · ${(r.premises ?? []).length} requirements · signers: ${esc((r.signers ?? []).map((s) => s.label).join(" | "))}</p>
+      ${amend}</div>`;
+  }).join("");
+  $("panel").innerHTML = `<h3>Policy book - what Lena left behind, and what changed since</h3>
+    <p>Four signed policies. Every case in the queue answers to the running version. Amendments need the owner countersignature and are written into the record.</p>${cards}`;
+  for (const r of Object.values(S.rulesets)) {
+    const btn = document.getElementById(`am-go-${r.sop_id}`);
+    if (btn) btn.onclick = () => doAmend(r.sop_id);
+  }
+  renderFeedCard();
+}
+
+function registryVendors() {
+  const names = [];
+  for (const r of Object.values(S.rulesets)) {
+    for (const v of r.active_vendors ?? []) {
+      if (!names.includes(v)) names.push(v);
+    }
+  }
+  return names;
+}
+
+function vendorIn(sopId, name) {
+  return (S.rulesets[sopId]?.active_vendors ?? []).includes(name);
+}
+
+function renderFeedCard() {
+  const rows = registryVendors().map((v) => {
+    const exp = vendorIn("SOP-FIN-01", v) ? "active" : "removed";
+    const pay = vendorIn("SOP-PAY-01", v) ? "active" : "removed";
+    const gone = exp === "removed" && pay === "removed";
+    const action = gone ? "removed - see record book"
+      : `<button class="decide" data-rmvendor="${esc(v)}">Apply registry removal</button>`;
+    return `<tr><td><strong>${esc(v)}</strong></td><td>${exp}</td><td>${pay}</td><td>${action}</td></tr>`;
+  }).join("");
+  const synced = S.feed?.syncedAt ? S.feed.syncedAt.slice(0, 16).replace("T", " ") : "never";
+  const d = document.createElement("div");
+  d.className = "case";
+  d.innerHTML = `<h4>Vendor registry - simulated county feed</h4>
+    <p class="story">Last synced ${esc(synced)} (UTC). When the registry changes, the change lands as a signed policy version - never as a quiet edit.</p>
+    <table class="ledger"><thead><tr><th>Vendor</th><th>Spend policy</th><th>Payout policy</th><th>Registry action</th></tr></thead><tbody>${rows}</tbody></table>
+    <p style="margin-top:10px"><button class="decide" id="syncBtn">Sync registry now</button></p>`;
+  $("panel").appendChild(d);
+  const s = document.getElementById("syncBtn");
+  if (s) s.onclick = () => syncRegistry();
+  d.querySelectorAll("[data-rmvendor]").forEach((b) => { b.onclick = () => doVendorUpdate(b.dataset.rmvendor); });
+}
+
+function syncRegistry() {
+  S.feed = S.feed ?? {};
+  S.feed.syncedAt = new Date().toISOString();
+  appendDecision({
+    status: "NOTE", sop_id: "REGISTRY", policy_title: "Vendor registry sync",
+    action_id: "REGISTRY-SYNC", actor_id: role().actor_id,
+    rule_version_hash: "registry", timestamp: S.feed.syncedAt,
+    derivation: [`Registry sync at ${S.feed.syncedAt}: vendor list re-verified against the signed policies.`],
+  });
+  persistSnapshot();
+  renderPanel();
+}
+
+function doVendorUpdate(vendor) {
+  const targets = Object.values(S.rulesets).filter((r) => Array.isArray(r.active_vendors) && r.active_vendors.includes(vendor));
+  if (targets.length === 0) return;
+  const stamp = new Date().toISOString();
+  for (const rules of targets) {
+    const next = JSON.parse(JSON.stringify(rules));
+    next.active_vendors = next.active_vendors.filter((v) => v !== vendor);
+    next.version = {
+      ...next.version,
+      id: bumpVersion(next.version?.id ?? "v1.0.0"),
+      effective_date: todayStr(),
+      signed_by: `registry update via ${role().actor_id}`,
+    };
+    next.version.version_hash = `sha256:${sha256Hex(canonicalRulesetContent(next))}`;
+    appendDecision({
+      status: "SUPERSEDED", sop_id: rules.sop_id, policy_title: rules.title,
+      action_id: `REGISTRY-${rules.sop_id}`, actor_id: role().actor_id,
+      rule_version_hash: rules.version?.version_hash ?? "unknown", timestamp: stamp,
+      derivation: [`Registry update removed ${vendor}; version ${rules.version?.id} superseded.`],
+    });
+    appendDecision({
+      status: "SIGNED", sop_id: rules.sop_id, policy_title: next.title,
+      action_id: `REGISTRY-${rules.sop_id}-NEW`, actor_id: role().actor_id,
+      rule_version_hash: next.version.version_hash, timestamp: stamp,
+      derivation: [`Version ${next.version.id} signed into force without ${vendor}.`],
+    });
+    S.rulesets[rules.sop_id] = next;
+    S.versions = S.versions ?? {};
+    S.versions[rules.sop_id] = { n: next.version.id, note: `${vendor} removed by registry update` };
+  }
+  persistSnapshot();
+  renderPanel();
+}
+function ledgerToolsHTML() {
+  return `<p><button class="decide" id="expBtn">Export record</button> <label class="decide" style="cursor:pointer">Import record<input id="impFile" type="file" accept="application/json" style="display:none"></label> <span id="impFlag" style="margin-left:10px;font-size:13px"></span></p>`;
+}
+function exportRecord() {
+  const blob = new Blob([JSON.stringify({ exported: new Date().toISOString(), ledger: getEntries(), decisions: S.decisions, versions: S.versions ?? null, signed: S.signed }, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "handover-record.json";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+function importRecordFile(file) {
+  const flag = () => document.getElementById("impFlag");
+  const say = (t) => { const f = flag(); if (f) f.textContent = t; };
+  const rd = new FileReader();
+  rd.onload = () => {
+    try {
+      const snap = JSON.parse(String(rd.result ?? ""));
+      const entries = Array.isArray(snap) ? snap : snap.ledger;
+      if (!Array.isArray(entries)) throw new Error("badfile");
+      importEntries(entries);
+      if (!verifyChain().ok) throw new Error("chain");
+      if (snap && !Array.isArray(snap)) {
+        if (snap.decisions && typeof snap.decisions === "object") S.decisions = snap.decisions;
+        if (snap.signed === true) S.signed = true;
+        S.versions = snap.versions ?? S.versions ?? null;
+      }
+      persistSnapshot();
+      renderPanel();
+      wireLedgerTools();
+      say(`Imported ${entries.length} entries - chain verified.`);
+    } catch (e) {
+      say("Import refused: file is not a verifiable record.");
+    }
+  };
+  rd.readAsText(file);
+}
+function wireLedgerTools() {
+  const ex = document.getElementById("expBtn");
+  if (ex) ex.onclick = () => exportRecord();
+  const im = document.getElementById("impFile");
+  if (im) im.onchange = () => { if (im.files && im.files[0]) importRecordFile(im.files[0]); };
+}
+function newCaseState() {
+  if (!S.newCase) S.newCase = { sop_id: null, values: {}, sigs: {}, result: null, entry: null };
+  return S.newCase;
+}
+
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function fieldHTML(f, val) {
+  const lab = `<label>${esc(f.label)} `;
+  if (f.type === "choice") {
+    const opts = (f.choices ?? []).map((c) => `<option${String(c) === String(val ?? "") ? " selected" : ""}>${esc(c)}</option>`).join("");
+    return `<p>${lab}<select data-nfield="${f.key}">${opts}</select></label></p>`;
+  }
+  if (f.type === "yesno") {
+    const yes = val === true || val === "yes";
+    return `<p>${lab}<select data-nfield="${f.key}"><option value="no"${yes ? "" : " selected"}>No</option><option value="yes"${yes ? " selected" : ""}>Yes</option></select></label></p>`;
+  }
+  if (f.type === "amount") {
+    return `<p>${lab}<input data-nfield="${f.key}" type="number" min="0" step="any" value="${esc(val ?? "")}"></label></p>`;
+  }
+  if (f.type === "date") {
+    const d = !val || val === "today" ? todayStr() : val;
+    return `<p>${lab}<input data-nfield="${f.key}" type="date" value="${esc(d)}"></label></p>`;
+  }
+  const init = val ?? (f.default !== undefined && f.default !== "today" ? f.default : "");
+  return `<p>${lab}<input data-nfield="${f.key}" type="text" value="${esc(init)}"></label></p>`;
+}
+
+function readField(f, el) {
+  if (f.type === "yesno") return el.value === "yes";
+  if (f.type === "amount") return el.value === "" ? undefined : Number(el.value);
+  return el.value;
+}
+
+function shortName() {
+  return role().key === "tomas" ? "Tomas" : "Maya";
+}
+
+function renderNewCase() {
+  const p = $("panel");
+  const policies = Object.values(S.rulesets);
+  if (!S.signed || policies.length === 0) {
+    p.innerHTML = `<h3>New case: write it yourself</h3><p>Lena signs the pack first - then this desk opens.</p>`;
+    return;
+  }
+  const st = newCaseState();
+  if (!policies.find((r) => r.sop_id === st.sop_id)) {
+    st.sop_id = policies[0].sop_id; st.values = {}; st.sigs = {}; st.result = null; st.entry = null;
+  }
+  const rules = policies.find((r) => r.sop_id === st.sop_id);
+  for (const f of rules.input_fields ?? []) {
+    if (st.values[f.key] !== undefined) continue;
+    if (f.type === "choice" && Array.isArray(f.choices) && f.choices.length > 0) st.values[f.key] = f.choices[0];
+    else if (f.type === "yesno") st.values[f.key] = false;
+    else if (f.type === "date") st.values[f.key] = todayStr();
+  }
+  const opts = policies.map((r) => `<option value="${r.sop_id}"${r.sop_id === st.sop_id ? " selected" : ""}>${esc(r.title)}</option>`).join("");
+  const fields = (rules.input_fields ?? []).map((f) => fieldHTML(f, st.values[f.key])).join("");
+  const boxes = (rules.signers ?? []).map((s) => {
+    const note = thresholdNote(rules, s.key);
+    return `<label><input type="checkbox" data-nsig="${s.key}"${st.sigs[s.key] === true ? " checked" : ""}> ${esc(s.label)}${note ? ` <small>(${esc(note)})</small>` : ""}</label>`;
+  }).join("");
+  const verdict = st.result ? verdictHTML(st.result, st.entry, rules) : "";
+  p.innerHTML = `<h3>New case: write it yourself</h3>
+    <p>Pick a policy, fill the facts, tick who signed. Blank or uncovered values are refused, not guessed.</p>
+    <p><label>Policy <select id="ncPolicy">${opts}</select></label></p>
+    ${fields}
+    <div class="sigs">${boxes}</div>
+    <button class="decide" id="ncGo">Decide as ${esc(shortName())} -></button>
+    <div id="ncVerdict">${verdict}</div>`;
+  $("ncPolicy").onchange = (e) => { st.sop_id = e.target.value; st.values = {}; st.sigs = {}; st.result = null; st.entry = null; renderPanel(); };
+  p.querySelectorAll("[data-nfield]").forEach((el) => {
+    el.onchange = () => {
+      const f = (rules.input_fields ?? []).find((x) => x.key === el.dataset.nfield);
+      if (f) { st.values[f.key] = readField(f, el); st.result = null; st.entry = null; }
+    };
+  });
+  p.querySelectorAll("[data-nsig]").forEach((box) => {
+    box.onchange = () => { st.sigs[box.dataset.nsig] = box.checked; st.result = null; st.entry = null; };
+  });
+  $("ncGo").onclick = () => decideNewCase(rules, st);
+}
+
+function decideNewCase(rules, st) {
+  const req = { action_id: `NEW-${role().actor_id}-${Date.now()}`, actor_id: role().actor_id };
+  for (const f of rules.input_fields ?? []) {
+    let v = st.values[f.key];
+    if (v === undefined && f.default !== undefined && f.default !== "today") v = f.default;
+    if (f.type === "date" && (v === undefined || v === "today")) v = todayStr();
+    if (v !== undefined) req[f.key] = v;
+  }
+  req.signatures = { ...st.sigs };
+  const result = evaluateAction(req, rules);
+  const entry = appendDecision(result, req);
+  st.result = result; st.entry = entry;
+  renderPanel();
 }
 
 function renderLedger() {
@@ -362,9 +715,10 @@ function renderLedger() {
     <td><span class="pill ${stampClass(e.status)}">${esc(stampWord(e.status))}</span></td>
     <td class="hash">${esc(e.action_id)}</td>
     <td class="hash">${esc(short(e.hash))}</td></tr>`).join("");
-  $("panel").innerHTML = `<h3>Record book — every answer, in order</h3>${badge}
+  $("panel").innerHTML = `<h3>Record book — every answer, in order</h3>${ledgerToolsHTML()}${badge}
     ${entries.length === 0 ? "<p>Nothing recorded yet — sign the pack and decide the first case.</p>" :
     `<table class="ledger"><thead><tr><th>#</th><th>Date</th><th>Outcome</th><th>Action</th><th>Fingerprint</th></tr></thead><tbody>${rows}</tbody></table>`}`;
+  wireLedgerTools();
   $("footer").textContent = "Demonstration figures throughout — thresholds, names, and amounts stand in for a real client's own.";
 }
 
