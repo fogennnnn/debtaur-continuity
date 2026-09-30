@@ -3,8 +3,9 @@
  * Imports the proven engine + ledger modules unchanged; all demo content
  * comes from /api/company and the rulesets. Zero dependencies.
  */
-import { evaluateAction } from "/src/engine.js";
-import { appendDecision, verifyChain, getEntries } from "/src/ledger.js";
+import { evaluateAction, nextIssueId } from "/src/engine.js";
+import { appendDecision, verifyChain, getEntries, sha256Hex } from "/src/ledger.js";
+import { canonicalRulesetContent } from "/src/integrity.js";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -32,10 +33,39 @@ async function load() {
       const rules = await r.json();
       S.rulesets[rules.sop_id] = rules;
     }
+    if (refuseUntrustedRulesets()) return;
     renderAll();
   } catch (e) {
     $("panel").innerHTML = `<div class="err"><strong>The console could not load.</strong><br>${esc(e?.message ?? e)}<br><br>Run <span class="hash">npm run demo</span>, then open the printed URL.</div>`;
   }
+}
+
+function refuseUntrustedRulesets() {
+  for (const rules of Object.values(S.rulesets)) {
+    const recomputed = `sha256:${sha256Hex(canonicalRulesetContent(rules))}`;
+    const stored = String(rules?.version?.version_hash ?? "");
+    if (stored === recomputed) continue;
+    const issueId = nextIssueId(rules?.issue_prefix ?? "ISS-2026");
+    const reason = `Edited ruleset refused at load: stored ${stored} does not match recomputed ${recomputed}. Only a fresh signature from the owner changes the policy.`;
+    const entry = appendDecision({
+      status: "REFUSED",
+      sop_id: rules.sop_id,
+      policy_title: rules.title,
+      action_id: "RULESET-LOAD",
+      actor_id: "system",
+      rule_version_hash: stored || "(missing)",
+      timestamp: new Date().toISOString(),
+      derivation: [reason],
+      refusal_details: {
+        missing_premise_id: "RULESET_INTEGRITY",
+        reason,
+        policy_issue: { id: issueId, title: `Edited policy refused — ${rules.title}`, missing_premise: "RULESET_INTEGRITY", context: { stored, recomputed } },
+      },
+    });
+    $("panel").innerHTML = `<div class="err"><strong>This console refused to start.</strong><br>${esc(reason)}<br><br><span class="hash">stored: ${esc(stored)}<br>recomputed: ${esc(recomputed)}</span><br><br>Follow-up card ${esc(issueId)} · recorded as entry #${entry.seq}.</div>`;
+    return true;
+  }
+  return false;
 }
 
 const role = () => S.roles.find((r) => r.key === S.roleKey) ?? S.roles[0];
@@ -56,7 +86,8 @@ function renderHandover() {
     return;
   }
   box.className = "handover";
-  box.innerHTML = `<strong>${esc(S.company.name)} — ${S.company.people} people.</strong> ${esc(S.company.outgoing.name)}, ${esc(S.company.outgoing.role)}. ${esc(S.company.note)}<br>
+  box.innerHTML = `<strong>${esc(S.company.name)} is a ${esc(S.company.people)}-person print shop.</strong><br>
+    Founder ${esc(S.company.outgoing.name)} retires at month's end after 22 years. Her four signed policies must keep running the business without her.<br>
     <button id="signBtn">Lena signs the succession pack →</button>`;
   $("signBtn").onclick = signHandover;
 }
@@ -119,28 +150,109 @@ function factsLine(c) {
   return bits.join(" · ");
 }
 
+const TRACKS = [
+  { key: "spend", title: "Spend — money out the door", ids: ["EXP-01", "EXP-02", "EXP-03", "PAY-01"] },
+  { key: "onboarding", title: "Clients — who the shop takes on", ids: ["ONB-01", "ONB-02"] },
+  { key: "hiring", title: "Hiring — who joins the shop", ids: ["HIRE-02", "HIRE-01"] },
+];
+
+const CLOSE_LINES = [
+  "Every decision carries a signed record of the human who authorised it.",
+  "An uncovered case is refused and named rather than guessed.",
+  "Nobody can quietly widen the policy after the founder steps back.",
+];
+
+function thresholdNote(rules, signerKey) {
+  for (const p of rules?.premises ?? []) {
+    const pm = p?.params ?? {};
+    if (pm.override_signer === signerKey) {
+      const th = rules?.[pm.threshold_field] ?? pm.threshold;
+      if (typeof th === "number") return `override above $${Number(th).toLocaleString("en-US")}`;
+      return "override pen";
+    }
+  }
+  return "";
+}
+
+function caseCard(c) {
+  const rules = rulesFor(c);
+  const done = S.decisions[c.id];
+  const sigs = done ? done.sigs : { ...c.request.signatures };
+  const boxes = (rules?.signers ?? []).map((s) => {
+    const on = sigs[s.key] === true ? "checked" : "";
+    const dis = S.signed && !done ? "" : "disabled";
+    const note = thresholdNote(rules, s.key);
+    return `<label><input type="checkbox" data-case="${c.id}" data-sig="${s.key}" ${on} ${dis}> ${esc(s.label)}${note ? ` <small>(${esc(note)})</small>` : ""}</label>`;
+  }).join("");
+  const verdict = !done ? "" : verdictHTML(done.result, done.entry, rules);
+  const btn = S.signed && !done
+    ? `<button class="decide" data-decide="${c.id}">Decide as ${esc(role().label.split(" — ")[0])} →</button>`
+    : !S.signed ? `<p style="font-size:13px;color:var(--ink2)">Lena signs the pack first — then this queue opens.</p>` : "";
+  return `<div class="case"><h4>${c.id} · ${esc(c.title)}</h4>
+    <p class="story">${esc(c.story)}</p>
+    <p class="facts">${esc(factsLine(c))}</p>
+    <div class="sigs">${boxes}</div>${btn}${verdict}</div>`;
+}
+
+function tamperCardHTML() {
+  const done = S.decisions["DRAFT-01"];
+  if (!S.signed) {
+    return `<div class="case"><h4>Policy desk — an edited draft arrives</h4>
+      <p style="font-size:13px;color:var(--ink2)">Lena signs the pack first — then this desk opens.</p></div>`;
+  }
+  if (!done) {
+    return `<div class="case"><h4>Policy desk — an edited draft arrives</h4>
+      <p class="story">A copy of the spend policy arrived claiming a $999,999 limit. Load it and watch what happens.</p>
+      <button class="decide" id="draftBtn">Load the edited draft →</button></div>`;
+  }
+  const rules = S.rulesets["SOP-FIN-01"];
+  return `<div class="case"><h4>Policy desk — an edited draft arrives</h4>
+    <p class="story">A copy of the spend policy arrived claiming a $999,999 limit. It was loaded and refused.</p>
+    ${verdictHTML(done.result, done.entry, rules)}</div>`;
+}
+
+function tryTamperedDraft() {
+  const rules = S.rulesets["SOP-FIN-01"];
+  if (!rules) return;
+  const altered = JSON.parse(JSON.stringify(rules));
+  altered.threshold = 999999;
+  const recomputed = "sha256:" + sha256Hex(canonicalRulesetContent(altered));
+  const stored = String(altered.version?.version_hash ?? "");
+  const issueId = nextIssueId(rules?.issue_prefix ?? "ISS-2026");
+  const reason = `Edited draft refused: stored ${stored} does not match recomputed ${recomputed}. Only a fresh signature from the owner changes the policy.`;
+  const result = {
+    status: "REFUSED",
+    sop_id: rules.sop_id,
+    policy_title: rules.title,
+    action_id: "DRAFT-01",
+    actor_id: role().actor_id,
+    rule_version_hash: stored,
+    timestamp: new Date().toISOString(),
+    derivation: [reason],
+    refusal_details: {
+      missing_premise_id: "RULESET_INTEGRITY",
+      reason,
+      policy_issue: { id: issueId, title: `Edited draft refused — ${rules.title}`, missing_premise: "RULESET_INTEGRITY", context: { stored, recomputed } },
+    },
+  };
+  const entry = appendDecision(result);
+  S.decisions["DRAFT-01"] = { sigs: {}, result, entry };
+  renderPanel();
+}
+
 function renderQueue() {
   const p = $("panel");
   const head = `<h3>First week without Lena — the case queue</h3>
-    <p>Each case arrives the way work really arrives. Tick who actually signed, then Decide. The signed policy answers — not Lena.</p>`;
-  p.innerHTML = head + S.cases.map((c) => {
-    const rules = rulesFor(c);
-    const done = S.decisions[c.id];
-    const sigs = done ? done.sigs : { ...c.request.signatures };
-    const boxes = (rules?.signers ?? []).map((s) => {
-      const on = sigs[s.key] === true ? "checked" : "";
-      const dis = S.signed && !done ? "" : "disabled";
-      return `<label><input type="checkbox" data-case="${c.id}" data-sig="${s.key}" ${on} ${dis}> ${esc(s.label)}</label>`;
+    <p>Each case arrives the way work really arrives. You are the reviewer: ticking a box asserts that person signed. The engine checks your claim against the signed policy — it takes nothing on trust. Tick, then Decide.</p>`;
+  const tracks = TRACKS.map((t) => {
+    const cards = t.ids.map((id) => {
+      const c = S.cases.find((x) => x.id === id);
+      return c ? caseCard(c) : "";
     }).join("");
-    const verdict = !done ? "" : verdictHTML(done.result, done.entry);
-    const btn = S.signed && !done
-      ? `<button class="decide" data-decide="${c.id}">Decide as ${esc(role().label.split(" — ")[0])} →</button>`
-      : !S.signed ? `<p style="font-size:13px;color:var(--ink2)">Lena signs the pack first — then this queue opens.</p>` : "";
-    return `<div class="case"><h4>${c.id} · ${esc(c.title)}</h4>
-      <p class="story">${esc(c.story)}</p>
-      <p class="facts">${esc(factsLine(c))}</p>
-      <div class="sigs">${boxes}</div>${btn}${verdict}</div>`;
+    return `<h4 style="font-family:var(--serif);margin:20px 0 10px">${esc(t.title)}</h4>${cards}`;
   }).join("");
+  const close = `<div class="case"><h4>Closing the week</h4>${CLOSE_LINES.map((l) => `<p style="margin:6px 0">${esc(l)}</p>`).join("")}</div>`;
+  p.innerHTML = head + tracks + tamperCardHTML() + close;
   p.querySelectorAll("input[type=checkbox]").forEach((box) => {
     box.onchange = () => {
       const c = S.cases.find((x) => x.id === box.dataset.case);
@@ -151,8 +263,9 @@ function renderQueue() {
   p.querySelectorAll("[data-decide]").forEach((btn) => {
     btn.onclick = () => decide(btn.dataset.decide);
   });
+  const draft = p.querySelector("#draftBtn");
+  if (draft) draft.onclick = () => { if (S.signed) tryTamperedDraft(); };
 }
-
 function decide(caseId) {
   const c = S.cases.find((x) => x.id === caseId);
   const rules = rulesFor(c);
@@ -165,17 +278,45 @@ function decide(caseId) {
   renderPanel();
 }
 
-function verdictHTML(result, entry) {
+function premiseById(rules, id) {
+  return (rules?.premises ?? []).find((p) => p?.id === id) ?? null;
+}
+
+function signerLabel(rules, key) {
+  const found = (rules?.signers ?? []).find((s) => s?.key === key);
+  return found?.label ?? key;
+}
+
+function clearingFor(premiseId, rules) {
+  if (premiseId === "RULESET_INTEGRITY") {
+    return "To clear this: a fresh signature from the owner on a re-signed policy. Only the owner holds that pen.";
+  }
+  const p = premiseById(rules, premiseId);
+  const pm = p?.params ?? {};
+  const key = pm.override_signer ?? pm.signer ?? null;
+  if (key) {
+    const label = pm.override_label ?? signerLabel(rules, key);
+    const kind = pm.override_signer ? "owner override signature" : "signature";
+    return `To clear this: ${label} ${kind}. Only ${label} holds that pen.`;
+  }
+  return "To clear this: meet the requirement above, then run the case again.";
+}
+
+function verdictHTML(result, entry, rules) {
   const st = result.status;
   const premise = result.refusal_details?.missing_premise_id ?? result.escalation_details?.unsatisfied_premise_id ?? null;
   const reason = result.refusal_details?.reason ?? result.escalation_details?.reason ?? "All requirements met — the business moves on.";
   const issue = result.refusal_details?.policy_issue ?? result.escalation_details?.policy_issue ?? null;
+  const gov = premise && rules ? premiseById(rules, premise) : null;
+  const govLine = gov ? `<p class="verdict">Governing rule: ${esc(gov.description)}</p>` : "";
+  const clearLine = (st === "REFUSED" || st === "ESCALATED") && premise
+    ? `<p class="verdict">${esc(clearingFor(premise, rules))}</p>` : "";
   return `<div class="stamp ${stampClass(st)}">${stampWord(st)}</div>
     <p class="verdict">${esc(reason)}${premise ? ` <span class="hash">Gap: ${esc(premise)}</span>` : ""}</p>
+    ${govLine}${clearLine}
     ${issue ? `<div class="issue"><h5>Follow-up card · ${esc(issue.id)}</h5><div><strong>${esc(issue.title)}</strong></div></div>` : ""}
     <p class="hash" style="font-size:12px">Recorded as entry #${entry.seq} · ${esc(short(entry.hash))}</p>`;
 }
-
 function caseAmount(c) {
   const d = S.decisions[c.id];
   if (!d) return 0;
