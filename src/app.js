@@ -96,7 +96,7 @@ function renderHandover() {
   }
   box.className = "handover";
   box.innerHTML = `<strong>${esc(S.company.name)} is a ${esc(S.company.people)}-person print shop.</strong><br>
-    Founder ${esc(S.company.outgoing.name)} retires at month's end after 22 years. Her four signed policies must keep running the business without her.<br>
+    Founder ${esc(S.company.outgoing.name)} retires at month's end after 22 years. Her signed policies must keep running the business without her.<br>
     <button id="signBtn">Lena signs the succession pack →</button>`;
   $("signBtn").onclick = signHandover;
 }
@@ -146,7 +146,7 @@ function persistSnapshot() {
   try {
     localStorage.setItem(SNAP_KEY, JSON.stringify({
       ledger: getEntries(), decisions: S.decisions, versions: S.versions ?? null, signed: S.signed,
-      rulesets: S.rulesets,
+      rulesets: S.rulesets, encoded: S.encoded ?? null,
     }));
   } catch (e) { /* private mode: session-only record */ }
 }
@@ -160,6 +160,7 @@ function restoreSnapshot() {
   S.decisions = snap.decisions && typeof snap.decisions === "object" ? snap.decisions : {};
   S.versions = snap.versions ?? null;
   S.signed = snap.signed === true;
+  if (snap.encoded) S.encoded = snap.encoded;
   if (snap.rulesets && typeof snap.rulesets === "object") {
     for (const rules of Object.values(snap.rulesets)) {
       const recomputed = `sha256:${sha256Hex(canonicalRulesetContent(rules))}`;
@@ -537,7 +538,7 @@ function renderBook() {
       ${amend}</div>`;
   }).join("");
   $("panel").innerHTML = `<h3>Policy book - what Lena left behind, and what changed since</h3>
-    <p>Four signed policies. Every case in the queue answers to the running version. Amendments need the owner countersignature and are written into the record.</p>${cards}`;
+    <p>Signed policies. Every case in the queue answers to the running version. Amendments need the owner countersignature and are written into the record.</p>${cards}`;
   for (const r of Object.values(S.rulesets)) {
     const btn = document.getElementById(`am-go-${r.sop_id}`);
     if (btn) btn.onclick = () => doAmend(r.sop_id);
@@ -654,6 +655,14 @@ function importRecordFile(file) {
         if (snap.decisions && typeof snap.decisions === "object") S.decisions = snap.decisions;
         if (snap.signed === true) S.signed = true;
         S.versions = snap.versions ?? S.versions ?? null;
+        if (snap.rulesets && typeof snap.rulesets === "object") {
+          for (const rules of Object.values(snap.rulesets)) {
+            const recomputed = `sha256:${sha256Hex(canonicalRulesetContent(rules))}`;
+            if (String(rules?.version?.version_hash ?? "") !== recomputed) throw new Error("rules");
+          }
+          for (const [sopId, rules] of Object.entries(snap.rulesets)) S.rulesets[sopId] = rules;
+        }
+        if (snap.encoded) S.encoded = snap.encoded;
       }
       persistSnapshot();
       renderPanel();
@@ -955,7 +964,7 @@ function doEncode() {
   if (!(typeof limit === "number" && Number.isFinite(limit) && limit > 0)) { say("Enter a positive owner-sign limit."); return; }
   if (reqLabel.length === 0 || execLabel.length === 0) { say("Name both day-to-day signers."); return; }
   if (!ok || !ok.checked) { say("Amendments and new policies need the owner countersignature."); return; }
-  const n = (S.customCount = (S.customCount ?? 0) + 1);
+  const n = Object.keys(S.rulesets).filter((k) => k.indexOf("SOP-CUSTOM-") === 0).length + 1;
   const sopId = `SOP-CUSTOM-${String(n).padStart(2, "0")}`;
   const tag = sopId.replace(/-/g, "_");
   const rules = {
