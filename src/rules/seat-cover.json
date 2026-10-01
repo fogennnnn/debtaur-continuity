@@ -4,13 +4,22 @@
   "demo_story": "When Lena cannot be reached, nobody knows who may decide what - speed dies while everyone waits for her.",
   "version": {
     "id": "sop_seat_01_v1.0.0",
-    "version_hash": "sha256:ecbcd546257e61bf0af0d91e5f11cce8856e6583579ed66f9c2be37fd306066e",
+    "version_hash": "sha256:8aa4cf1d6984187edd643f5d985b0991584e4f60a85b8f1de158adaecf9e7c28",
     "effective_date": "2026-05-01",
     "signed_by": "outgoing-owner"
   },
   "issue_prefix": "ISS-SEAT-2026",
   "elevated_limit": 10000,
   "premises": [
+    {
+      "id": "PREMISE_SEAT_00_POSITIVE_AMOUNT",
+      "description": "The decision states a positive amount.",
+      "evaluator_key": "positive-amount",
+      "params": {
+        "field": "decision_amount"
+      },
+      "escalate_on": []
+    },
     {
       "id": "PREMISE_SEAT_01_ABSENCE_DECLARED",
       "description": "The absence is declared at an explicit level.",

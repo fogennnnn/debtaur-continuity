@@ -4,13 +4,24 @@
   "demo_story": "Routine work must fly while big commitments wait - the paper process either freezes everything or nothing.",
   "version": {
     "id": "sop_thaw_01_v1.0.0",
-    "version_hash": "sha256:1065bb4b85ae497760d6f16c46e1f5d12435cc323a087139240c815f578db893",
+    "version_hash": "sha256:384b91375176103a2c070ea3a016ffc48abf3aa999bc0ef574e867dc39d1bad4",
     "effective_date": "2026-05-01",
     "signed_by": "outgoing-owner"
   },
   "issue_prefix": "ISS-THAW-2026",
   "discount_line": 10,
   "premises": [
+    {
+      "id": "PREMISE_THAW_00_VALID_DISCOUNT",
+      "description": "The discount is a number at or above zero.",
+      "evaluator_key": "minimum-floor",
+      "params": {
+        "field": "discount_pct",
+        "floor": 0,
+        "label": "discount"
+      },
+      "escalate_on": []
+    },
     {
       "id": "PREMISE_THAW_01_CLASS_LISTED",
       "description": "The decision states whether it is routine or frozen-class work.",

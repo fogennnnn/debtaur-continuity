@@ -6,6 +6,7 @@
 import { evaluateAction, nextIssueId } from "/src/engine.js";
 import { appendDecision, verifyChain, getEntries, sha256Hex, importEntries, clearLedger } from "/src/ledger.js";
 import { canonicalRulesetContent } from "/src/integrity.js";
+import { FUZZ_CASES } from "/src/company.js";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -182,6 +183,7 @@ function renderPanel() {
   else if (S.tab === "cont") renderCont();
   else if (S.tab === "guard") renderGuard();
   else if (S.tab === "play") renderPlaybook();
+  else if (S.tab === "sell") renderSell();
   else renderLedger();
 }
 
@@ -221,6 +223,15 @@ function thresholdNote(rules, signerKey) {
   return "";
 }
 
+function roleName(key) {
+  return key === "tomas" ? "Tomas" : "Maya";
+}
+
+function prepBanner(done) {
+  if (!done || done.result || !done.stagedBy || done.stagedBy === role().key) return "";
+  return `<p style="font-size:13px">Prepared by ${roleName(done.stagedBy)} - countersign as ${roleName(role().key)}.</p>`;
+}
+
 function caseCard(c) {
   const rules = rulesFor(c);
   const done = S.decisions[c.id];
@@ -239,7 +250,7 @@ function caseCard(c) {
     <p class="story">${esc(c.story)}</p>
     <p class="facts">${esc(factsLine(c))}</p>
     <div class="reqs"><strong>The policy will check:</strong><ul>${(rules?.premises ?? []).map((pr) => `<li>${esc(pr.description ?? pr.id)}</li>`).join("")}</ul></div>
-    <div class="sigs">${boxes}</div>${btn}${verdict}</div>`;
+    <div class="sigs">${boxes}</div>${prepBanner(done)}${btn}${verdict}</div>`;
 }
 
 function tamperCardHTML() {
@@ -403,9 +414,17 @@ function caseAmount(c) {
   return Number(q.amount ?? q.compensation ?? 0) || 0;
 }
 
+function policyArea(key) {
+  if (key === "expense-signoff" || key === "vendor-payment") return "Spend";
+  if (key === "client-onboarding") return "Clients";
+  if (key === "hiring-approval") return "Hiring";
+  return "Continuity";
+}
+
 function leakageMath() {
   let leak = 0;
   const risks = [];
+  const areas = {};
   for (const c of S.cases) {
     const rules = rulesFor(c);
     if (!rules) continue;
@@ -414,11 +433,14 @@ function leakageMath() {
     try { r = evaluateAction(req, rules); } catch (e) { continue; }
     if (r.status !== "AUTHORIZED") {
       const amt = Number(c.request.amount ?? c.request.compensation ?? 0) || 0;
-      if (amt > 0) leak += amt;
+      const area = policyArea(c.policy);
+      areas[area] = areas[area] ?? { leak: 0, n: 0 };
+      areas[area].n += 1;
+      if (amt > 0) { leak += amt; areas[area].leak += amt; }
       else risks.push(c.id);
     }
   }
-  return { leak, risks };
+  return { leak, risks, areas };
 }
 
 function dependencyBand() {
@@ -447,7 +469,7 @@ function renderDash() {
       <div class="stat"><div class="k">Blind week leaks</div><div class="v">${money(leak.leak)}</div></div>
       <div class="stat"><div class="k">Key-person load</div><div class="v">${dep.band}</div></div>
     </div>
-    <p style="margin-top:14px;max-width:64ch">Same cases, no policies: <strong>${money(leak.leak)} leaks</strong>${leak.risks.length > 0 ? ` plus ${leak.risks.join(", ")} decided blind` : ""}. ${esc(dep.line)}</p>
+    <p style="margin-top:14px;max-width:64ch">Same cases, no policies: <strong>${money(leak.leak)} leaks</strong>${leak.risks.length > 0 ? ` plus ${leak.risks.join(", ")} decided blind` : ""} (${Object.entries(leak.areas).map(([a, s]) => `${a} ${money(s.leak)}`).join(" | ")}). ${esc(dep.line)}</p>
     <p style="margin-top:14px;max-width:64ch">The business ran ${done.length} decisions without Lena. ${esc.length === 0 ? "Nothing needed her override." : `${esc.length} case${esc.length === 1 ? "" : "s"} wait${esc.length === 1 ? "s" : ""} on an owner decision — each one named, none of them silent.`} That is what a sellable business looks like: profitable, documented, and no longer dependent on any one person.</p>`;
 }
 
@@ -629,7 +651,7 @@ function doVendorUpdate(vendor) {
   renderPanel();
 }
 function ledgerToolsHTML() {
-  return `<p><button class="decide" id="expBtn">Export record</button> <label class="decide" style="cursor:pointer">Import record<input id="impFile" type="file" accept="application/json" style="display:none"></label> <span id="impFlag" style="margin-left:10px;font-size:13px"></span></p>`;
+  return `<p><button class="decide" id="expBtn">Export record</button> <button class="decide" id="packBtn">Download buyer pack</button> <label class="decide" style="cursor:pointer">Import record<input id="impFile" type="file" accept="application/json" style="display:none"></label> <span id="impFlag" style="margin-left:10px;font-size:13px"></span></p>`;
 }
 function exportRecord() {
   const blob = new Blob([JSON.stringify({ exported: new Date().toISOString(), ledger: getEntries(), decisions: S.decisions, versions: S.versions ?? null, signed: S.signed }, null, 2)], { type: "application/json" });
@@ -674,9 +696,32 @@ function importRecordFile(file) {
   };
   rd.readAsText(file);
 }
+function downloadBuyerPack() {
+  const entries = getEntries();
+  const v = verifyChain();
+  const done = decided();
+  const pack = {
+    exported: new Date().toISOString(),
+    business: S.company?.name ?? "Beacon Print & Supply",
+    note: "Diligence bundle: every decision below carries the human who authorised it.",
+    policies: Object.values(S.rulesets),
+    ledger: entries,
+    verification: { chain_ok: v.ok, entries: entries.length, decisions: done.length },
+  };
+  const blob = new Blob([JSON.stringify(pack, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "buyer-pack.json";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+
 function wireLedgerTools() {
   const ex = document.getElementById("expBtn");
   if (ex) ex.onclick = () => exportRecord();
+  const pk = document.getElementById("packBtn");
+  if (pk) pk.onclick = () => downloadBuyerPack();
   const im = document.getElementById("impFile");
   if (im) im.onchange = () => { if (im.files && im.files[0]) importRecordFile(im.files[0]); };
 }
@@ -1026,6 +1071,59 @@ function doEncode() {
   renderPanel();
 }
 
+function renderSell() {
+  const done = decided();
+  const auth = done.filter((c) => S.decisions[c.id].result.status === "AUTHORIZED");
+  const stopped = done.filter((c) => S.decisions[c.id].result.status !== "AUTHORIZED");
+  const entries = getEntries();
+  const v = verifyChain();
+  const dep = dependencyBand();
+  const moved = auth.reduce((s, c) => s + caseAmount(c), 0);
+  const held = stopped.reduce((s, c) => s + caseAmount(c), 0);
+  const policies = Object.keys(S.rulesets).length;
+  const cards = [
+    ["Decisions on record", `${done.length} run - every one names who authorised it`],
+    ["Money", `${money(moved)} moved correctly - ${money(held)} stopped`],
+    ["Record", entries.length === 0 ? "empty - decide the first case" : `verified - ${entries.length} ${entries.length === 1 ? "entry" : "entries"} chained${v.ok ? "" : " - CHECK FAILED"}`],
+    ["Policies", `${policies} signed policies answer every case`],
+  ].map(([k, t]) => `<div class="stat"><div class="k">${esc(k)}</div><div class="v" style="font-size:20px">${esc(t)}</div></div>`).join("");
+  const verdict = dep.band === "Unknown"
+    ? "Run the week first - then this page is the proof."
+    : dep.band === "Low"
+    ? "Key-person load is low. This is what a transferable week looks like to a buyer or lender."
+    : "An owner call is waiting - named above, none of it silent. Even the exceptions are documented.";
+  const fz = S.fuzz ?? null;
+  const fzOut = !fz ? "" : `<p class="verdict">${fz.safe}/${fz.total} hostile inputs safely refused or escalated - ${fz.bad.length} problems (${fz.throws} crashes).</p>` + (fz.bad.length > 0 ? `<p class="hash">${esc(fz.bad.join(" | "))}</p>` : "");
+  $("panel").innerHTML = `<h3>Why this business is sellable</h3>
+    <p>A buyer doing diligence asks one question: does this business run without its owner? Everything below is live evidence from this console - not a slide.</p>
+    <div class="dash">${cards}</div>
+    <p style="margin-top:14px;max-width:64ch">${esc(verdict)}</p>
+    <p style="max-width:64ch">Ask which process breaks first at your next client - then encode it live on the Encode a policy tab.</p>
+    <div class="case"><h4>Break it - the attack suite</h4>
+    <p class="story">${FUZZ_CASES.length} hostile inputs: blanks, negatives, wrong types, unknown vendors, hostile strings. Every one must refuse or escalate; none may authorize or crash. The engine runs each one live, right here.</p>
+    <button class="decide" id="fuzzBtn">Run the attack suite</button>${fzOut}</div>`;
+  const fb = document.getElementById("fuzzBtn");
+  if (fb) fb.onclick = () => runFuzz();
+}
+
+function runFuzz() {
+  let safe = 0, throws = 0;
+  const bad = [];
+  for (let i = 0; i < FUZZ_CASES.length; i++) {
+    const fz = FUZZ_CASES[i];
+    try {
+      const rules = rulesFor({ policy: fz.policy });
+      if (!rules) { bad.push(`fuzz[${i}] missing ruleset`); continue; }
+      const req = { action_id: `FUZZ-${i}`, actor_id: "fuzz", ...structuredClone(fz.request) };
+      const r = evaluateAction(req, rules);
+      if (r.status === "AUTHORIZED") bad.push(`fuzz[${i}] ${fz.policy} AUTHORIZED`);
+      else safe++;
+    } catch (e) { throws++; bad.push(`fuzz[${i}] threw`); }
+  }
+  S.fuzz = { safe, total: FUZZ_CASES.length, bad, throws };
+  renderPanel();
+}
+
 function renderLedger() {
   const entries = getEntries();
   const v = verifyChain();
@@ -1043,5 +1141,12 @@ function renderLedger() {
   wireLedgerTools();
   $("footer").textContent = "Demonstration figures throughout — thresholds, names, and amounts stand in for a real client's own.";
 }
+
+document.addEventListener("change", (e) => {
+  const box = e.target?.closest?.("input[type=checkbox][data-case]");
+  if (!box) return;
+  const id = box.dataset.case;
+  if (S.decisions[id] && !S.decisions[id].result) S.decisions[id].stagedBy = role().key;
+});
 
 load();
