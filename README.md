@@ -21,4 +21,4 @@ npm run demo         # browser console: open http://localhost:8081/
 
 Watch Lena sign the succession pack, then work the first-week case queue as Maya or
 Tomas. The Business pulse tab shows money moved correctly, money stopped, and how
-many owner decisions the week needed.
+many owner decisions the week needed. Start on the First day tab: it walks Maya's first morning case by case, then hands you the queue.

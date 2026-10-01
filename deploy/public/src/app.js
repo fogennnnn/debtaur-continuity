@@ -16,7 +16,7 @@ const stampWord = (st) => st === "AUTHORIZED" ? "Approved" : st === "ESCALATED" 
 
 const S = {
   company: null, succession: null, roles: [], cases: [],
-  rulesets: {}, tab: "queue", roleKey: "maya", signed: false, decisions: {},
+  rulesets: {}, tab: "first", roleKey: "maya", signed: false, decisions: {},
 };
 
 async function load() {
@@ -172,7 +172,8 @@ function restoreSnapshot() {
 
 function renderPanel() {
   persistSnapshot();
-  if (S.tab === "queue") renderQueue();
+  if (S.tab === "first") renderFirst();
+  else if (S.tab === "queue") renderQueue();
   else if (S.tab === "dash") renderDash();
   else if (S.tab === "book") renderBook();
   else if (S.tab === "new") renderNewCase();
@@ -235,6 +236,7 @@ function caseCard(c) {
   return `<div class="case"><h4>${c.id} · ${esc(c.title)}</h4>
     <p class="story">${esc(c.story)}</p>
     <p class="facts">${esc(factsLine(c))}</p>
+    <div class="reqs"><strong>The policy will check:</strong><ul>${(rules?.premises ?? []).map((pr) => `<li>${esc(pr.description ?? pr.id)}</li>`).join("")}</ul></div>
     <div class="sigs">${boxes}</div>${btn}${verdict}</div>`;
 }
 
@@ -282,6 +284,36 @@ function tryTamperedDraft() {
   const entry = appendDecision(result);
   S.decisions["DRAFT-01"] = { sigs: {}, result, entry };
   renderPanel();
+}
+
+const FIRST_STEPS = [
+  { caseId: "EXP-01", note: "First, something ordinary. Restock paper, both signatures present. Watch a routine approval go through on its own." },
+  { caseId: "EXP-03", note: "Now a small invoice with a missing signature. The amount does not matter - a missing name stops it cold." },
+  { caseId: "ONB-02", note: "Last one. A returning client with a fresh approval. The paper checklist would file this as new. Watch what the policy does instead." },
+];
+
+const FIRST_INTRO = "Maya's first morning without Lena. Three cases arrive before lunch. Watch what the policies do with each one.";
+const FIRST_CLOSE = "Three moments, zero calls to Lena. That is the whole product: the shop runs on what she signed, not on her being there. Now open the queue and run the week yourself.";
+
+function renderFirst() {
+  const p = $("panel");
+  S.first = S.first ?? { idx: 0 };
+  const head = `<h3>First day - Maya's first morning without Lena</h3>
+    <div class="guide"><p>${esc(FIRST_INTRO)}</p></div>`;
+  if (S.first.idx >= FIRST_STEPS.length) {
+    p.innerHTML = head + `<div class="guide"><p>${esc(FIRST_CLOSE)}</p></div>
+      <p><button class="decide" id="firstQueue">Open the case queue -></button> <button class="decide" id="firstReplay" style="background:transparent;color:var(--ink);border:2px solid var(--ink)">Replay the morning</button></p>`;
+    $("firstQueue").onclick = () => { S.tab = "queue"; renderTabs(); renderPanel(); };
+    $("firstReplay").onclick = () => { S.first.idx = 0; renderPanel(); };
+    return;
+  }
+  const step = FIRST_STEPS[S.first.idx];
+  const c = S.cases.find((x) => x.id === step.caseId);
+  p.innerHTML = head + `<div class="guide"><p><strong>Moment ${S.first.idx + 1} of ${FIRST_STEPS.length}.</strong> ${esc(step.note)}</p></div>` +
+    (c ? caseCard(c) : "<p>Case files missing - reload the console.</p>") +
+    `<p><button class="decide" id="firstNext">${S.first.idx === FIRST_STEPS.length - 1 ? "Finish the morning" : "Next moment"} -></button></p>`;
+  wireCases(p);
+  $("firstNext").onclick = () => { S.first.idx += 1; renderPanel(); };
 }
 
 function renderQueue() {

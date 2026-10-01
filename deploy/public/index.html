@@ -24,6 +24,13 @@
   .handover{margin:16px 0;background:var(--card);border:1px solid var(--line);border-left:6px solid var(--brass);
     border-radius:10px;padding:14px 18px;font-size:15px}
   .handover.signed{border-left-color:var(--green)}
+  .guide{background:var(--paper2);border-left:4px solid var(--brass);border-radius:0 10px 10px 0;
+    padding:12px 16px;margin:14px 0;font-size:14.5px;max-width:64ch}
+  .guide p{margin:4px 0}
+  .reqs{font-size:13px;background:var(--paper);border:1px solid var(--line);border-radius:8px;
+    padding:8px 12px;margin:0 0 10px}
+  .reqs ul{margin:6px 0 0;padding-left:18px}
+  .reqs strong{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--brass)}
   .handover button{font:inherit;font-weight:700;border-radius:9px;padding:10px 20px;cursor:pointer;
     background:var(--ink);color:#f3efe4;border:none;margin-top:10px}
   .handover button:disabled{opacity:.45;cursor:wait}
@@ -87,14 +94,12 @@
   <div class="roles" id="roleBar" aria-label="Acting role"></div>
 
   <div class="tabs" role="tablist" aria-label="Console views">
-    <button class="tab" role="tab" id="tab-queue" aria-selected="true" data-tab="queue">Case queue</button>
+    <button class="tab" role="tab" id="tab-first" aria-selected="true" data-tab="first">First day</button>
+    <button class="tab" role="tab" id="tab-queue" aria-selected="false" data-tab="queue">Case queue</button>
     <button class="tab" role="tab" id="tab-dash" aria-selected="false" data-tab="dash">Business pulse</button>
     <button class="tab" role="tab" id="tab-book" aria-selected="false" data-tab="book">Policy book</button>
     <button class="tab" role="tab" id="tab-ledger" aria-selected="false" data-tab="ledger">Record book</button>
     <button class="tab" role="tab" id="tab-new" aria-selected="false" data-tab="new">New case</button>
-    <button class="tab" role="tab" id="tab-cont" aria-selected="false" data-tab="cont">Continuity SOPs</button>
-    <button class="tab" role="tab" id="tab-guard" aria-selected="false" data-tab="guard">Profit Guardrails</button>
-    <button class="tab" role="tab" id="tab-play" aria-selected="false" data-tab="play">Absence Playbook</button>
     <button class="tab" role="tab" id="tab-cont" aria-selected="false" data-tab="cont">Continuity SOPs</button>
     <button class="tab" role="tab" id="tab-guard" aria-selected="false" data-tab="guard">Profit Guardrails</button>
     <button class="tab" role="tab" id="tab-play" aria-selected="false" data-tab="play">Absence Playbook</button>
