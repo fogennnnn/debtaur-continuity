@@ -380,7 +380,7 @@ function penViolation(rules, staged, held, actorId, actionId) {
   const claimer = staged[bad];
   const holder = penHolder(bad);
   const who = roleName(claimer);
-  const reason = `${who} cannot claim the ${bad} pen - it belongs to ${holder === "owner" ? "the owner" : holder}. Tick only pens ${who} holds.`;
+  const reason = `${who} does not hold the ${bad} pen. It belongs to ${holder === "owner" ? "the owner" : holder} - tick only pens ${who} holds.`;
   const issueId = nextIssueId(rules?.issue_prefix ?? "ISS-2026");
   return {
     status: "REFUSED",
@@ -399,7 +399,7 @@ function penViolation(rules, staged, held, actorId, actionId) {
   };
 }
 
-function decide(caseId) {
+function decide(caseId, extraLines = []) {
   const c = S.cases.find((x) => x.id === caseId);
   const rules = rulesFor(c);
   if (!rules) return;
@@ -414,6 +414,10 @@ function decide(caseId) {
     return;
   }
   const result = evaluateAction(req, rules);
+  if (extraLines.length > 0) {
+    result.derivation.splice(-1, 0, ...extraLines);
+    result.derivation_chain.splice(-1, 0, ...extraLines);
+  }
   const entry = appendDecision(result, req);
   S.decisions[caseId] = { sigs: held, result, entry, overridden: S.decisions[caseId]?.overridden ?? false };
   renderPanel();
@@ -452,8 +456,11 @@ function verdictHTML(result, entry, rules, ov) {
   const govLine = gov ? `<p class="verdict">Governing rule: ${esc(gov.description)}</p>` : "";
   const clearLine = (st === "REFUSED" || st === "ESCALATED") && premise
     ? `<p class="verdict">${esc(clearingFor(premise, rules))}</p>` : "";
+  const armed = ov === "new" ? S.newCase?.armed === true : S.decisions[ov]?.armed === true;
   const ovBtn = (st === "ESCALATED" && ov)
-    ? `<p><button class="decide" data-override="${ov}">Owner override (Lena) - release this case</button><br><span style="font-size:12px">Only the owner holds this pen. The override itself goes into the record.</span></p>` : "";
+    ? (armed
+      ? `<p><button class="decide" data-override="${ov}">Confirm countersign - Lena clears it</button><br><span style="font-size:12px">Second click executes. The countersign itself goes into the record as a simulated owner act.</span></p>`
+      : `<p><button class="decide" data-override="${ov}">Owner countersign (clear escalation)</button><br><span style="font-size:12px">Only the owner holds this pen. Clicking arms an explicit, simulated countersign - nothing hidden.</span></p>`) : "";
   return `<div class="stamp ${stampClass(st)}">${stampWord(st)}</div>
     <p class="verdict">${esc(reason)}${premise ? ` <span class="hash">Gap: ${esc(premise)}</span>` : ""}</p>
     ${govLine}${clearLine}
@@ -807,7 +814,7 @@ function downloadBuyerPack() {
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
 }
 
-function downloadDiligence() {
+function diligenceText() {
   const entries = getEntries();
   const v = verifyChain();
   const done = decided();
@@ -850,13 +857,26 @@ function downloadDiligence() {
   }
   L.push("");
   L.push(`Record: ${v.ok ? `verified, ${entries.length} entries chained` : "CHECK FAILED"}`);
-  const blob = new Blob([L.join("\n")], { type: "text/plain" });
+  return L.join("\n");
+}
+
+function downloadDiligence() {
+  const blob = new Blob([diligenceText()], { type: "text/plain" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = "diligence-summary.txt";
   document.body.appendChild(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+
+async function copyDiligence() {
+  try {
+    await navigator.clipboard.writeText(diligenceText());
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 
 function wireLedgerTools() {
@@ -969,7 +989,7 @@ function renderNewCase() {
   $("ncGo").onclick = () => decideNewCase(rules, st);
 }
 
-function decideNewCase(rules, st) {
+function decideNewCase(rules, st, extraLines = []) {
   const req = { action_id: `NEW-${role().actor_id}-${Date.now()}`, actor_id: role().actor_id };
   for (const f of rules.input_fields ?? []) {
     let v = st.values[f.key];
@@ -987,6 +1007,10 @@ function decideNewCase(rules, st) {
     return;
   }
   const result = evaluateAction(req, rules);
+  if (extraLines.length > 0) {
+    result.derivation.splice(-1, 0, ...extraLines);
+    result.derivation_chain.splice(-1, 0, ...extraLines);
+  }
   const entry = appendDecision(result, req);
   st.result = result; st.entry = entry;
   renderPanel();
@@ -1273,9 +1297,18 @@ function renderSell() {
     <p style="max-width:64ch">Ask which process breaks first at your next client - then encode it live on the Encode a policy tab.</p>
     <div class="case"><h4>Break it - the attack suite</h4>
     <p class="story">${FUZZ_CASES.length} hostile inputs: blanks, negatives, wrong types, unknown vendors, hostile strings. Every one must refuse or escalate; none may authorize or crash. The engine runs each one live, right here.</p>
-    <button class="decide" id="fuzzBtn">Run the attack suite</button>${fzOut}</div>`;
+    <button class="decide" id="fuzzBtn">Run the attack suite</button>${fzOut}</div>
+    ${decided().length > 0 ? `<div class="case"><h4>Take the record with you</h4>
+    <p class="story">Counters, fingerprints, and the last ledger entries as plain text. Paste it into an email, a file, a buyer pack.</p>
+    <button class="decide" id="copyDilig">Copy diligence summary</button> <span id="copyDiligFlag" style="margin-left:10px;font-size:13px"></span></div>` : ""}`;
   const fb = document.getElementById("fuzzBtn");
   if (fb) fb.onclick = () => runFuzz();
+  const cb = document.getElementById("copyDilig");
+  if (cb) cb.onclick = async () => {
+    const ok = await copyDiligence();
+    const f = document.getElementById("copyDiligFlag");
+    if (f) f.textContent = ok ? "Copied - paste it anywhere." : "Copy blocked by the browser - use Download buyer pack instead.";
+  };
 }
 
 function runFuzz() {
@@ -1344,23 +1377,33 @@ const OWNER_PENS = ["ceo", "director", "controller", "owner"];
 
 function overrideCase(ov) {
   const stamp = new Date().toISOString();
+  const isArmed = ov === "new" ? S.newCase?.armed === true : S.decisions[ov]?.armed === true;
+  if (!isArmed) {
+    if (ov === "new") { if (S.newCase) S.newCase.armed = true; }
+    else { S.decisions[ov] = S.decisions[ov] ?? {}; S.decisions[ov].armed = true; }
+    persistSnapshot();
+    renderPanel();
+    return;
+  }
   let rules;
   if (ov === "new") {
     const st = S.newCase;
     if (!st?.result || st.result.status !== "ESCALATED") return;
     rules = Object.values(S.rulesets).find((r) => r.sop_id === st.sop_id);
     if (!rules) return;
+    const premise = st.result.escalation_details?.unsatisfied_premise_id ?? "?";
     st.sigs = st.sigs ?? {};
     st.staged = st.staged ?? {};
     for (const k of OWNER_PENS) { st.sigs[k] = true; st.staged[k] = "lena"; }
     st.overridden = true;
+    st.armed = false;
     appendDecision({
       status: "SIGNED", sop_id: rules.sop_id, policy_title: rules.title,
-      action_id: `OVERRIDE-${rules.sop_id}`, actor_id: "lena-owner-override",
+      action_id: `OVERRIDE-${rules.sop_id}`, actor_id: "lena-owner-override (simulated)",
       rule_version_hash: rules?.version?.version_hash ?? "unknown", timestamp: stamp,
-      derivation: [`Owner override signed by Lena: owner pens asserted over the escalated state.`],
+      derivation: [`Owner countersign (simulated): cleared ${premise} on ${rules.sop_id}; no owner role exists in this demo, so the countersign is explicit.`],
     });
-    decideNewCase(rules, st);
+    decideNewCase(rules, st, [`Owner countersign (Lena) cleared ${premise} before evaluation.`]);
     return;
   }
   const c = S.cases.find((x) => x.id === ov);
@@ -1369,18 +1412,20 @@ function overrideCase(ov) {
   if (!d.result || d.result.status !== "ESCALATED") return;
   rules = rulesFor(c);
   if (!rules) return;
+  const premise = d.result.escalation_details?.unsatisfied_premise_id ?? "?";
   d.sigs = { ...(c.request?.signatures ?? {}), ...(d.sigs ?? {}) };
   d.staged = d.staged ?? {};
   for (const k of OWNER_PENS) { d.sigs[k] = true; d.staged[k] = "lena"; }
   d.overridden = true;
+  d.armed = false;
   S.decisions[ov] = d;
   appendDecision({
     status: "SIGNED", sop_id: rules.sop_id, policy_title: rules.title,
-    action_id: `OVERRIDE-${ov}`, actor_id: "lena-owner-override",
+    action_id: `OVERRIDE-${ov}`, actor_id: "lena-owner-override (simulated)",
     rule_version_hash: rules?.version?.version_hash ?? "unknown", timestamp: stamp,
-    derivation: [`Owner override signed by Lena: owner pens asserted over the escalated state.`],
+    derivation: [`Owner countersign (simulated): cleared ${premise} on ${ov}; no owner role exists in this demo, so the countersign is explicit.`],
   });
-  decide(ov);
+  decide(ov, [`Owner countersign (Lena) cleared ${premise} before evaluation.`]);
 }
 
 document.addEventListener("click", (e) => {
