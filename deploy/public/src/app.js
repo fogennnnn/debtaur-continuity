@@ -177,6 +177,7 @@ function renderPanel() {
   else if (S.tab === "dash") renderDash();
   else if (S.tab === "book") renderBook();
   else if (S.tab === "new") renderNewCase();
+  else if (S.tab === "encode") renderEncode();
   else if (S.tab === "cont") renderCont();
   else if (S.tab === "guard") renderGuard();
   else if (S.tab === "play") renderPlaybook();
@@ -302,7 +303,8 @@ function renderFirst() {
     <div class="guide"><p>${esc(FIRST_INTRO)}</p></div>`;
   if (S.first.idx >= FIRST_STEPS.length) {
     p.innerHTML = head + `<div class="guide"><p>${esc(FIRST_CLOSE)}</p></div>
-      <p><button class="decide" id="firstQueue">Open the case queue -></button> <button class="decide" id="firstReplay" style="background:transparent;color:var(--ink);border:2px solid var(--ink)">Replay the morning</button></p>`;
+      <p><button class="decide" id="firstQueue">Open the case queue -></button> <button class="decide" id="firstReplay" style="background:transparent;color:var(--ink);border:2px solid var(--ink)">Replay the morning</button></p>
+      <p style="font-size:13px">Prefer to watch first? The <a href="https://dem.oooooooooo.se/" target="_blank" rel="noopener">four-moment guided run</a> plays the same idea end to end.</p>`;
     $("firstQueue").onclick = () => { S.tab = "queue"; renderTabs(); renderPanel(); };
     $("firstReplay").onclick = () => { S.first.idx = 0; renderPanel(); };
     return;
@@ -400,6 +402,32 @@ function caseAmount(c) {
   return Number(q.amount ?? q.compensation ?? 0) || 0;
 }
 
+function leakageMath() {
+  let leak = 0;
+  const risks = [];
+  for (const c of S.cases) {
+    const rules = rulesFor(c);
+    if (!rules) continue;
+    const req = { ...c.request, signatures: { ...c.request.signatures }, action_id: "LEAK-" + c.id, actor_id: "leak-check" };
+    let r;
+    try { r = evaluateAction(req, rules); } catch (e) { continue; }
+    if (r.status !== "AUTHORIZED") {
+      const amt = Number(c.request.amount ?? c.request.compensation ?? 0) || 0;
+      if (amt > 0) leak += amt;
+      else risks.push(c.id);
+    }
+  }
+  return { leak, risks };
+}
+
+function dependencyBand() {
+  const done = decided();
+  const ow = done.filter((c) => S.decisions[c.id].result.status === "ESCALATED");
+  if (done.length === 0) return { band: "Unknown", line: "No decisions run yet - key-person load unknown." };
+  if (ow.length === 0) return { band: "Low", line: `All ${done.length} decisions ran with zero owner calls. The shop is running without Lena.` };
+  return { band: "Watch", line: `${ow.length} decision${ow.length === 1 ? "" : "s"} waiting on an owner call - each one named above. The shop runs, but Lena is still needed here.` };
+}
+
 function renderDash() {
   const done = decided();
   const auth = done.filter((c) => S.decisions[c.id].result.status === "AUTHORIZED");
@@ -407,13 +435,18 @@ function renderDash() {
   const esc = done.filter((c) => S.decisions[c.id].result.status === "ESCALATED");
   const moved = auth.reduce((s, c) => s + caseAmount(c), 0);
   const held = stopped.reduce((s, c) => s + caseAmount(c), 0);
+  const leak = leakageMath();
+  const dep = dependencyBand();
   $("panel").innerHTML = `<h3>Business pulse — the week Lena was gone</h3>
     <div class="dash">
       <div class="stat"><div class="k">Decisions run</div><div class="v">${done.length} / ${S.cases.length}</div></div>
       <div class="stat"><div class="k">Money moved correctly</div><div class="v">${money(moved)}</div></div>
       <div class="stat"><div class="k">Money stopped</div><div class="v">${money(held)}</div></div>
       <div class="stat"><div class="k">Owner calls needed</div><div class="v">${esc.length}</div></div>
+      <div class="stat"><div class="k">Blind week leaks</div><div class="v">${money(leak.leak)}</div></div>
+      <div class="stat"><div class="k">Key-person load</div><div class="v">${dep.band}</div></div>
     </div>
+    <p style="margin-top:14px;max-width:64ch">Same cases, no policies: <strong>${money(leak.leak)} leaks</strong>${leak.risks.length > 0 ? ` plus ${leak.risks.join(", ")} decided blind` : ""}. ${esc(dep.line)}</p>
     <p style="margin-top:14px;max-width:64ch">The business ran ${done.length} decisions without Lena. ${esc.length === 0 ? "Nothing needed her override." : `${esc.length} case${esc.length === 1 ? "" : "s"} wait${esc.length === 1 ? "s" : ""} on an owner decision — each one named, none of them silent.`} That is what a sellable business looks like: profitable, documented, and no longer dependent on any one person.</p>`;
 }
 
@@ -887,6 +920,101 @@ function renderPlaybook() {
     <p class="story"><strong>Record:</strong> ${esc(s.ledger)}</p></div>`).join("");
   $("panel").innerHTML = `<h3>Absence playbook - two ways Lena can be gone</h3>
     <p>The same policies govern both. The difference is who is missing, never which rules apply.</p>${cards}`;
+}
+
+function renderEncode() {
+  const p = $("panel");
+  if (!S.signed) {
+    p.innerHTML = `<h3>Encode a policy - turn spoken rules into signed policy</h3><p>Lena signs the pack first - then this desk opens.</p>`;
+    return;
+  }
+  const done = S.encoded ?? null;
+  const result = !done ? "" : `<div class="case"><h4>Signed into force: ${esc(done.title)}</h4>
+    <p class="story">Policy ${esc(done.sopId)} now answers cases in the queue, the policy book, and the new-case desk. Trial run: ${esc(done.trialText)}</p>
+    ${verdictHTML(done.result, done.entry, S.rulesets[done.sopId])}</div>`;
+  p.innerHTML = `<h3>Encode a policy - turn spoken rules into signed policy</h3>
+    <p>Answer three questions the way an owner would say them. The console writes the signed policy, fingerprints it, and runs a trial case through it on the spot.</p>
+    <p><label>1. What decision does this policy govern? <input id="enc-what" type="text" value="Tool purchases" style="width:260px"></label></p>
+    <p><label>2. Above what amount must the owner sign? $ <input id="enc-limit" type="number" min="1" step="any" value="5000" style="width:140px"></label></p>
+    <p><label>3a. Who signs day-to-day as requester? <input id="enc-req" type="text" value="Requester" style="width:200px"></label></p>
+    <p><label>3b. Who signs day-to-day as executor? <input id="enc-exec" type="text" value="Finance" style="width:200px"></label></p>
+    <p><label><input id="enc-ok" type="checkbox"> Owner countersigns this policy</label></p>
+    <p><button class="decide" id="encGo">Sign policy into force -></button> <span id="encFlag" style="margin-left:10px;font-size:13px"></span></p>${result}`;
+  $("encGo").onclick = () => doEncode();
+}
+
+function doEncode() {
+  const flag = document.getElementById("encFlag");
+  const say = (t) => { if (flag) flag.textContent = t; };
+  const what = String(document.getElementById("enc-what")?.value ?? "").trim();
+  const limit = Number(document.getElementById("enc-limit")?.value);
+  const reqLabel = String(document.getElementById("enc-req")?.value ?? "").trim();
+  const execLabel = String(document.getElementById("enc-exec")?.value ?? "").trim();
+  const ok = document.getElementById("enc-ok");
+  if (what.length === 0) { say("Name the decision first."); return; }
+  if (!(typeof limit === "number" && Number.isFinite(limit) && limit > 0)) { say("Enter a positive owner-sign limit."); return; }
+  if (reqLabel.length === 0 || execLabel.length === 0) { say("Name both day-to-day signers."); return; }
+  if (!ok || !ok.checked) { say("Amendments and new policies need the owner countersignature."); return; }
+  const n = (S.customCount = (S.customCount ?? 0) + 1);
+  const sopId = `SOP-CUSTOM-${String(n).padStart(2, "0")}`;
+  const tag = sopId.replace(/-/g, "_");
+  const rules = {
+    sop_id: sopId,
+    title: `${what} - who may approve it`,
+    demo_story: "Encoded live from a three-question interview during the demo.",
+    version: {
+      id: `${tag.toLowerCase()}_v1.0.0`,
+      version_hash: "sha256:PENDING",
+      effective_date: todayStr(),
+      signed_by: `owner countersignature via ${role().actor_id}`,
+    },
+    threshold: limit,
+    supported_currencies: ["USD"],
+    premises: [
+      { id: `PREMISE_${tag}_01_PROPOSAL`, description: `Proposal needs the ${reqLabel} signature, a positive amount, and a vendor name.`,
+        evaluator_key: "require-all",
+        params: { checks: [
+          { evaluator_key: "signature-present", params: { signer: "requester", label: reqLabel } },
+          { evaluator_key: "positive-amount", params: { field: "amount" } },
+          { evaluator_key: "text-present", params: { field: "vendor" } },
+        ], success_detail: "proposal complete with amount and vendor." }, escalate_on: [] },
+      { id: `PREMISE_${tag}_02_CURRENCY`, description: "Currency must be explicitly supported (USD).",
+        evaluator_key: "currency-in-supported-set", params: { field: "currency", list: "supported_currencies" }, escalate_on: ["executor"] },
+      { id: `PREMISE_${tag}_03_LIMIT`, description: `Amounts above $${Number(limit).toLocaleString("en-US")} require an explicit owner override signature.`,
+        evaluator_key: "amount-over-threshold-needs-override",
+        params: { amount_field: "amount", threshold_field: "threshold", override_signer: "owner", override_label: "owner" }, escalate_on: ["executor"] },
+      { id: `PREMISE_${tag}_04_EXECUTION`, description: `Doing the work needs the ${execLabel} signature over the approved state.`,
+        evaluator_key: "signature-present", params: { signer: "executor", label: execLabel }, escalate_on: [] },
+    ],
+    signers: [
+      { key: "requester", label: reqLabel },
+      { key: "executor", label: execLabel },
+      { key: "owner", label: "Owner (override)" },
+    ],
+    input_fields: [
+      { key: "amount", label: "Amount ($)", type: "amount" },
+      { key: "currency", label: "Currency", type: "text", default: "USD" },
+      { key: "vendor", label: "Vendor name", type: "text" },
+    ],
+  };
+  rules.version.version_hash = "sha256:" + sha256Hex(canonicalRulesetContent(rules));
+  const stamp = new Date().toISOString();
+  appendDecision({
+    status: "SIGNED", sop_id: sopId, policy_title: rules.title,
+    action_id: `ENCODE-${sopId}`, actor_id: role().actor_id,
+    rule_version_hash: rules.version.version_hash, timestamp: stamp,
+    derivation: [`${rules.title} encoded from interview and signed into force.`],
+  });
+  S.rulesets[sopId] = rules;
+  S.versions = S.versions ?? {};
+  S.versions[sopId] = { n: rules.version.id, note: "encoded live during the demo" };
+  const trialAmount = Math.max(1, Math.floor(limit / 2));
+  const trialReq = { action_id: `ENCODE-TRIAL-${sopId}`, actor_id: role().actor_id, amount: trialAmount, currency: "USD", vendor: "Northwind Traders", signatures: { requester: true, executor: true, owner: false } };
+  const result = evaluateAction(trialReq, rules);
+  const entry = appendDecision(result, trialReq);
+  S.encoded = { sopId, title: rules.title, result, entry, trialText: `$${Number(trialAmount).toLocaleString("en-US")} with both signatures: ${result.status}` };
+  persistSnapshot();
+  renderPanel();
 }
 
 function renderLedger() {

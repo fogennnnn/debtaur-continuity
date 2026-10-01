@@ -80,6 +80,8 @@
   .pill.owner{background:var(--amberbg);color:var(--amber)} .pill.note{background:var(--paper2);color:var(--ink2)}
   footer{margin-top:26px;color:var(--ink2);font-size:13px;font-family:var(--mono)}
   .err{background:var(--redbg);border:2px solid var(--red);border-radius:10px;padding:16px}
+  @media(max-width:640px){.wrap{padding:16px 12px 60px}.panel{padding:14px}.role{flex:1 1 100%}
+    .dash{grid-template-columns:1fr 1fr}.stat .v{font-size:24px}.reqcard{grid-template-columns:1fr 1fr}}
 </style>
 </head>
 <body>
@@ -100,6 +102,7 @@
     <button class="tab" role="tab" id="tab-book" aria-selected="false" data-tab="book">Policy book</button>
     <button class="tab" role="tab" id="tab-ledger" aria-selected="false" data-tab="ledger">Record book</button>
     <button class="tab" role="tab" id="tab-new" aria-selected="false" data-tab="new">New case</button>
+    <button class="tab" role="tab" id="tab-encode" aria-selected="false" data-tab="encode">Encode a policy</button>
     <button class="tab" role="tab" id="tab-cont" aria-selected="false" data-tab="cont">Continuity SOPs</button>
     <button class="tab" role="tab" id="tab-guard" aria-selected="false" data-tab="guard">Profit Guardrails</button>
     <button class="tab" role="tab" id="tab-play" aria-selected="false" data-tab="play">Absence Playbook</button>
