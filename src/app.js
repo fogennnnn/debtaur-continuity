@@ -3,10 +3,10 @@
  * Imports the proven engine + ledger modules unchanged; all demo content
  * comes from /api/company and the rulesets. Zero dependencies.
  */
-import { evaluateAction, nextIssueId } from "/src/engine.js";
-import { appendDecision, verifyChain, getEntries, sha256Hex, importEntries, clearLedger } from "/src/ledger.js";
-import { canonicalRulesetContent } from "/src/integrity.js";
-import { FUZZ_CASES } from "/src/company.js";
+import { evaluateAction, nextIssueId } from "./engine.js";
+import { appendDecision, verifyChain, getEntries, sha256Hex, importEntries, clearLedger } from "./ledger.js";
+import { canonicalRulesetContent } from "./integrity.js";
+import { FUZZ_CASES } from "./company.js";
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -147,7 +147,7 @@ function persistSnapshot() {
   try {
     localStorage.setItem(SNAP_KEY, JSON.stringify({
       ledger: getEntries(), decisions: S.decisions, versions: S.versions ?? null, signed: S.signed,
-      rulesets: S.rulesets, encoded: S.encoded ?? null,
+      rulesets: S.rulesets, encoded: S.encoded ?? null, feed: S.feed ?? null,
     }));
   } catch (e) { /* private mode: session-only record */ }
 }
@@ -162,6 +162,7 @@ function restoreSnapshot() {
   S.versions = snap.versions ?? null;
   S.signed = snap.signed === true;
   if (snap.encoded) S.encoded = snap.encoded;
+  if (snap.feed) S.feed = snap.feed;
   if (snap.rulesets && typeof snap.rulesets === "object") {
     for (const rules of Object.values(snap.rulesets)) {
       const recomputed = `sha256:${sha256Hex(canonicalRulesetContent(rules))}`;
@@ -223,6 +224,20 @@ function thresholdNote(rules, signerKey) {
   return "";
 }
 
+const OWNER_ONLY = ["ceo", "director", "controller", "owner"];
+
+function pensOf(roleKey) {
+  const r = S.roles.find((x) => x.key === roleKey);
+  return Array.isArray(r?.pens) ? r.pens : [];
+}
+
+function penHolder(key) {
+  for (const r of S.roles) {
+    if (Array.isArray(r.pens) && r.pens.includes(key)) return roleName(r.key);
+  }
+  return "owner";
+}
+
 function roleName(key) {
   return key === "tomas" ? "Tomas" : "Maya";
 }
@@ -240,9 +255,11 @@ function caseCard(c) {
     const on = sigs[s.key] === true ? "checked" : "";
     const dis = S.signed && !done ? "" : "disabled";
     const note = thresholdNote(rules, s.key);
-    return `<label><input type="checkbox" data-case="${c.id}" data-sig="${s.key}" ${on} ${dis}> ${esc(s.label)}${note ? ` <small>(${esc(note)})</small>` : ""}</label>`;
+    const holder = penHolder(s.key);
+    const who = holder === "owner" ? "owner only" : `held by ${holder}`;
+    return `<label><input type="checkbox" data-case="${c.id}" data-sig="${s.key}" ${on} ${dis}> ${esc(s.label)}${note ? ` <small>(${esc(note)})</small>` : ""} <small>(${who})</small></label>`;
   }).join("");
-  const verdict = !done ? "" : verdictHTML(done.result, done.entry, rules);
+  const verdict = !done ? "" : verdictHTML(done.result, done.entry, rules, c.id);
   const btn = S.signed && !done
     ? `<button class="decide" data-decide="${c.id}">Decide as ${esc(role().label.split(" — ")[0])} →</button>`
     : !S.signed ? `<p style="font-size:13px;color:var(--ink2)">Lena signs the pack first — then this queue opens.</p>` : "";
@@ -311,8 +328,9 @@ const FIRST_CLOSE = "Three moments, zero calls to Lena. That is the whole produc
 function renderFirst() {
   const p = $("panel");
   S.first = S.first ?? { idx: 0 };
+  const signedNote = S.signed ? `<div class="guide"><p>Pack signed - this tour replays the morning. The live queue is yours.</p></div>` : "";
   const head = `<h3>First day - Maya's first morning without Lena</h3>
-    <div class="guide"><p>${esc(FIRST_INTRO)}</p></div>`;
+    <div class="guide"><p>${esc(FIRST_INTRO)}</p></div>${signedNote}`;
   if (S.first.idx >= FIRST_STEPS.length) {
     p.innerHTML = head + `<div class="guide"><p>${esc(FIRST_CLOSE)}</p></div>
       <p><button class="decide" id="firstQueue">Open the case queue -></button> <button class="decide" id="firstReplay" style="background:transparent;color:var(--ink);border:2px solid var(--ink)">Replay the morning</button></p>
@@ -356,15 +374,48 @@ function renderQueue() {
   const draft = p.querySelector("#draftBtn");
   if (draft) draft.onclick = () => { if (S.signed) tryTamperedDraft(); };
 }
+function penViolation(rules, staged, held, actorId, actionId) {
+  const bad = Object.keys(held).find((k) => held[k] === true && staged[k] && staged[k] !== "lena" && !pensOf(staged[k]).includes(k));
+  if (!bad) return null;
+  const claimer = staged[bad];
+  const holder = penHolder(bad);
+  const who = roleName(claimer);
+  const reason = `${who} cannot claim the ${bad} pen - it belongs to ${holder === "owner" ? "the owner" : holder}. Tick only pens ${who} holds.`;
+  const issueId = nextIssueId(rules?.issue_prefix ?? "ISS-2026");
+  return {
+    status: "REFUSED",
+    sop_id: rules.sop_id,
+    policy_title: rules.title,
+    action_id: actionId,
+    actor_id: actorId,
+    rule_version_hash: rules?.version?.version_hash ?? "unknown",
+    timestamp: new Date().toISOString(),
+    derivation: [`ROLE refusal at claim time: ${reason}`],
+    refusal_details: {
+      missing_premise_id: "ROLE_AUTHORITY",
+      reason,
+      policy_issue: { id: issueId, title: `Refused pen claim - ${rules.title}`, missing_premise: "ROLE_AUTHORITY", context: { pen: bad, claimer, holder } },
+    },
+  };
+}
+
 function decide(caseId) {
   const c = S.cases.find((x) => x.id === caseId);
   const rules = rulesFor(c);
   if (!rules) return;
   const held = S.decisions[caseId]?.sigs ?? { ...c.request.signatures };
   const req = { ...c.request, signatures: held, action_id: `${caseId}-${role().actor_id}`, actor_id: role().actor_id };
+  const pv = penViolation(rules, S.decisions[caseId]?.staged ?? {}, held, req.actor_id, req.action_id);
+  if (pv) {
+    const entry = appendDecision(pv, req);
+    S.decisions[caseId] = { sigs: held, staged: S.decisions[caseId]?.staged ?? {}, result: pv, entry, overridden: S.decisions[caseId]?.overridden ?? false };
+    persistSnapshot();
+    renderPanel();
+    return;
+  }
   const result = evaluateAction(req, rules);
   const entry = appendDecision(result, req);
-  S.decisions[caseId] = { sigs: held, result, entry };
+  S.decisions[caseId] = { sigs: held, result, entry, overridden: S.decisions[caseId]?.overridden ?? false };
   renderPanel();
 }
 
@@ -392,7 +443,7 @@ function clearingFor(premiseId, rules) {
   return "To clear this: meet the requirement above, then run the case again.";
 }
 
-function verdictHTML(result, entry, rules) {
+function verdictHTML(result, entry, rules, ov) {
   const st = result.status;
   const premise = result.refusal_details?.missing_premise_id ?? result.escalation_details?.unsatisfied_premise_id ?? null;
   const reason = result.refusal_details?.reason ?? result.escalation_details?.reason ?? "All requirements met — the business moves on.";
@@ -401,9 +452,12 @@ function verdictHTML(result, entry, rules) {
   const govLine = gov ? `<p class="verdict">Governing rule: ${esc(gov.description)}</p>` : "";
   const clearLine = (st === "REFUSED" || st === "ESCALATED") && premise
     ? `<p class="verdict">${esc(clearingFor(premise, rules))}</p>` : "";
+  const ovBtn = (st === "ESCALATED" && ov)
+    ? `<p><button class="decide" data-override="${ov}">Owner override (Lena) - release this case</button><br><span style="font-size:12px">Only the owner holds this pen. The override itself goes into the record.</span></p>` : "";
   return `<div class="stamp ${stampClass(st)}">${stampWord(st)}</div>
     <p class="verdict">${esc(reason)}${premise ? ` <span class="hash">Gap: ${esc(premise)}</span>` : ""}</p>
     ${govLine}${clearLine}
+    ${ovBtn}
     ${issue ? `<div class="issue"><h5>Follow-up card · ${esc(issue.id)}</h5><div><strong>${esc(issue.title)}</strong></div></div>` : ""}
     <p class="hash" style="font-size:12px">Recorded as entry #${entry.seq} · ${esc(short(entry.hash))}</p>`;
 }
@@ -536,6 +590,22 @@ function doAmend(sopId) {
   renderPanel();
 }
 
+function policyControls(rules) {
+  const parts = [];
+  const money = (k, label) => { if (typeof rules?.[k] === "number") parts.push(`${label} $${Number(rules[k]).toLocaleString("en-US")}`); };
+  money("threshold", "spend limit");
+  money("payment_threshold", "payout limit");
+  money("offer_threshold", "offer line");
+  money("elevated_limit", "elevated limit");
+  if (typeof rules?.discount_line === "number") parts.push(`discount line ${rules.discount_line}%`);
+  for (const p of rules?.premises ?? []) {
+    if (p?.evaluator_key === "minimum-floor" && typeof p?.params?.floor === "number") {
+      parts.push(`${p.params.field} floor ${p.params.floor}`);
+    }
+  }
+  return parts.length > 0 ? parts.join(" | ") : "no numeric controls";
+}
+
 function renderBook() {
   const cards = Object.values(S.rulesets).map((r) => {
     const ver = currentVersion(r.sop_id);
@@ -557,7 +627,10 @@ function renderBook() {
       <h4>${esc(r.title)}</h4>
       <p style="font-size:13.5px;color:var(--ink2);margin:4px 0">${esc(r.demo_story ?? "")}</p>
       <p class="meta">running version ${esc(ver.n)} (${esc(ver.note)}) · signed: ${esc(r.version?.signed_by ?? "?")} · effective ${esc(r.version?.effective_date ?? "?")} · fingerprint ${esc(short(r.version?.version_hash))} · ${(r.premises ?? []).length} requirements · signers: ${esc((r.signers ?? []).map((s) => s.label).join(" | "))}</p>
-      ${amend}</div>`;
+      ${amend}
+      <p class="meta">controls: ${esc(policyControls(r))}</p>
+      <p class="meta">pens: ${(r.signers ?? []).map((s) => { const h = penHolder(s.key); return `${s.label} (${h === "owner" ? "owner only" : `held by ${h}`})`; }).join(" | ")}</p>
+      <details><summary>Read the live premises</summary><ul>${(r.premises ?? []).map((p) => `<li>${esc(p.description ?? p.id)}</li>`).join("")}</ul></details></div>`;
   }).join("");
   $("panel").innerHTML = `<h3>Policy book - what Lena left behind, and what changed since</h3>
     <p>Signed policies. Every case in the queue answers to the running version. Amendments need the owner countersignature and are written into the record.</p>${cards}`;
@@ -597,10 +670,13 @@ function renderFeedCard() {
   d.innerHTML = `<h4>Vendor registry - simulated county feed</h4>
     <p class="story">Last synced ${esc(synced)} (UTC). When the registry changes, the change lands as a signed policy version - never as a quiet edit.</p>
     <table class="ledger"><thead><tr><th>Vendor</th><th>Spend policy</th><th>Payout policy</th><th>Registry action</th></tr></thead><tbody>${rows}</tbody></table>
+    <p style="margin-top:10px"><label><input id="feedOk" type="checkbox"> Owner countersigns registry changes</label> <span id="feedFlag" style="margin-left:10px;font-size:13px"></span></p>
     <p style="margin-top:10px"><button class="decide" id="syncBtn">Sync registry now</button></p>`;
   $("panel").appendChild(d);
   const s = document.getElementById("syncBtn");
   if (s) s.onclick = () => syncRegistry();
+  const fok = document.getElementById("feedOk");
+  if (fok) { fok.checked = S.feed?.ok === true; fok.onchange = () => { S.feed = S.feed ?? {}; S.feed.ok = fok.checked; persistSnapshot(); }; }
   d.querySelectorAll("[data-rmvendor]").forEach((b) => { b.onclick = () => doVendorUpdate(b.dataset.rmvendor); });
 }
 
@@ -620,6 +696,20 @@ function syncRegistry() {
 function doVendorUpdate(vendor) {
   const targets = Object.values(S.rulesets).filter((r) => Array.isArray(r.active_vendors) && r.active_vendors.includes(vendor));
   if (targets.length === 0) return;
+  if (!(S.feed?.ok === true)) {
+    const flag = document.getElementById("feedFlag");
+    if (flag) flag.textContent = "Registry changes need the owner countersignature - tick the box and try again.";
+    appendDecision({
+      status: "REFUSED", sop_id: "REGISTRY", policy_title: "Vendor registry change",
+      action_id: `REGISTRY-${vendor}`, actor_id: role().actor_id,
+      rule_version_hash: "registry", timestamp: new Date().toISOString(),
+      derivation: [`Registry removal of ${vendor} refused: no owner countersignature.`],
+      refusal_details: { missing_premise_id: "OWNER_COUNTERSIGN", reason: `Registry change for ${vendor} needs the owner countersignature.`,
+        policy_issue: { id: nextIssueId("ISS-REG-2026"), title: `Registry change refused - ${vendor}`, missing_premise: "OWNER_COUNTERSIGN", context: { vendor } } },
+    });
+    persistSnapshot();
+    return;
+  }
   const stamp = new Date().toISOString();
   for (const rules of targets) {
     const next = JSON.parse(JSON.stringify(rules));
@@ -651,7 +741,7 @@ function doVendorUpdate(vendor) {
   renderPanel();
 }
 function ledgerToolsHTML() {
-  return `<p><button class="decide" id="expBtn">Export record</button> <button class="decide" id="packBtn">Download buyer pack</button> <label class="decide" style="cursor:pointer">Import record<input id="impFile" type="file" accept="application/json" style="display:none"></label> <span id="impFlag" style="margin-left:10px;font-size:13px"></span></p>`;
+  return `<p><button class="decide" id="expBtn">Export record</button> <button class="decide" id="packBtn">Download buyer pack</button> <button class="decide" id="diligBtn">Diligence summary</button> <label class="decide" style="cursor:pointer">Import record<input id="impFile" type="file" accept="application/json" style="display:none"></label> <span id="impFlag" style="margin-left:10px;font-size:13px"></span></p>`;
 }
 function exportRecord() {
   const blob = new Blob([JSON.stringify({ exported: new Date().toISOString(), ledger: getEntries(), decisions: S.decisions, versions: S.versions ?? null, signed: S.signed }, null, 2)], { type: "application/json" });
@@ -717,11 +807,65 @@ function downloadBuyerPack() {
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
 }
 
+function downloadDiligence() {
+  const entries = getEntries();
+  const v = verifyChain();
+  const done = decided();
+  const L = [];
+  L.push("DILIGENCE SUMMARY - " + (S.company?.name ?? "Beacon Print & Supply"));
+  L.push("Exported: " + new Date().toISOString());
+  L.push("Figures are demonstration samples standing in for a real client's own.");
+  L.push("");
+  const auth = done.filter((c) => S.decisions[c.id].result.status === "AUTHORIZED");
+  const stopped = done.filter((c) => S.decisions[c.id].result.status !== "AUTHORIZED");
+  const moved = auth.reduce((s, c) => s + caseAmount(c), 0);
+  const held = stopped.reduce((s, c) => s + caseAmount(c), 0);
+  L.push(`Decisions run: ${done.length} of ${S.cases.length}`);
+  L.push(`Money moved correctly: $${moved.toLocaleString("en-US")}`);
+  L.push(`Money stopped: $${held.toLocaleString("en-US")}`);
+  L.push("");
+  L.push("Escalations and how they were resolved:");
+  const escs = done.filter((c) => S.decisions[c.id].result.status === "ESCALATED");
+  if (escs.length === 0) L.push("- none waiting on the owner");
+  for (const c of escs) {
+    const d = S.decisions[c.id];
+    const premise = d.result.escalation_details?.unsatisfied_premise_id ?? "?";
+    const state = d.overridden ? "RELEASED by owner override" : "still frozen, waiting on owner";
+    L.push(`- ${c.id} ${c.title}: ${state} (${premise}) [${String(d.entry?.hash ?? "?").slice(0, 12)}]`);
+  }
+  L.push("");
+  L.push("Policies in force:");
+  for (const r of Object.values(S.rulesets)) {
+    L.push(`- ${r.title} [${r.sop_id}] version ${r.version?.id} fingerprint ${r.version?.version_hash}`);
+  }
+  L.push("");
+  L.push("Integrity attacks attempted and refused:");
+  const integ = entries.filter((e) => e.refusal_details?.missing_premise_id === "RULESET_INTEGRITY");
+  if (integ.length === 0) L.push("- none attempted");
+  for (const e of integ) L.push(`- ${e.action_id} seq ${e.seq} hash ${String(e.hash).slice(0, 16)}`);
+  const ovs = entries.filter((e) => String(e.action_id ?? "").startsWith("OVERRIDE-"));
+  if (ovs.length > 0) {
+    L.push("Owner overrides signed:");
+    for (const e of ovs) L.push(`- ${e.action_id} seq ${e.seq}`);
+  }
+  L.push("");
+  L.push(`Record: ${v.ok ? `verified, ${entries.length} entries chained` : "CHECK FAILED"}`);
+  const blob = new Blob([L.join("\n")], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "diligence-summary.txt";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+
 function wireLedgerTools() {
   const ex = document.getElementById("expBtn");
   if (ex) ex.onclick = () => exportRecord();
   const pk = document.getElementById("packBtn");
   if (pk) pk.onclick = () => downloadBuyerPack();
+  const dg = document.getElementById("diligBtn");
+  if (dg) dg.onclick = () => downloadDiligence();
   const im = document.getElementById("impFile");
   if (im) im.onchange = () => { if (im.files && im.files[0]) importRecordFile(im.files[0]); };
 }
@@ -766,6 +910,17 @@ function shortName() {
   return role().key === "tomas" ? "Tomas" : "Maya";
 }
 
+function defaultAmount(rules, f) {
+  if (f.key === "discount_pct") return 0;
+  const th = rules?.threshold ?? rules?.payment_threshold ?? rules?.offer_threshold;
+  if (typeof th === "number") return Math.floor(th / 2);
+  if (f.key === "cash_weeks") return 10;
+  if (f.key === "margin_pct") return 18;
+  if (f.key === "red_weeks") return 0;
+  if (f.key === "response_days") return 1;
+  return undefined;
+}
+
 function renderNewCase() {
   const p = $("panel");
   const policies = Object.values(S.rulesets);
@@ -783,14 +938,17 @@ function renderNewCase() {
     if (f.type === "choice" && Array.isArray(f.choices) && f.choices.length > 0) st.values[f.key] = f.choices[0];
     else if (f.type === "yesno") st.values[f.key] = false;
     else if (f.type === "date") st.values[f.key] = todayStr();
+    else if (f.type === "amount") { const dflt = defaultAmount(rules, f); if (dflt !== undefined) st.values[f.key] = dflt; }
   }
   const opts = policies.map((r) => `<option value="${r.sop_id}"${r.sop_id === st.sop_id ? " selected" : ""}>${esc(r.title)}</option>`).join("");
   const fields = (rules.input_fields ?? []).map((f) => fieldHTML(f, st.values[f.key])).join("");
   const boxes = (rules.signers ?? []).map((s) => {
     const note = thresholdNote(rules, s.key);
-    return `<label><input type="checkbox" data-nsig="${s.key}"${st.sigs[s.key] === true ? " checked" : ""}> ${esc(s.label)}${note ? ` <small>(${esc(note)})</small>` : ""}</label>`;
+    const holder = penHolder(s.key);
+    const who = holder === "owner" ? "owner only" : `held by ${holder}`;
+    return `<label><input type="checkbox" data-nsig="${s.key}"${st.sigs[s.key] === true ? " checked" : ""}> ${esc(s.label)}${note ? ` <small>(${esc(note)})</small>` : ""} <small>(${who})</small></label>`;
   }).join("");
-  const verdict = st.result ? verdictHTML(st.result, st.entry, rules) : "";
+  const verdict = st.result ? verdictHTML(st.result, st.entry, rules, "new") : "";
   p.innerHTML = `<h3>New case: write it yourself</h3>
     <p>Pick a policy, fill the facts, tick who signed. Blank or uncovered values are refused, not guessed.</p>
     <p><label>Policy <select id="ncPolicy">${opts}</select></label></p>
@@ -820,6 +978,14 @@ function decideNewCase(rules, st) {
     if (v !== undefined) req[f.key] = v;
   }
   req.signatures = { ...st.sigs };
+  const npv = penViolation(rules, st.staged ?? {}, req.signatures, req.actor_id, req.action_id);
+  if (npv) {
+    const entry = appendDecision(npv, req);
+    st.result = npv; st.entry = entry;
+    persistSnapshot();
+    renderPanel();
+    return;
+  }
   const result = evaluateAction(req, rules);
   const entry = appendDecision(result, req);
   st.result = result; st.entry = entry;
@@ -865,7 +1031,13 @@ function renderCont() {
       <p style="font-size:13.5px;color:var(--ink2);margin:4px 0">${esc(r.demo_story ?? "")}</p>
       <p class="meta">signed: ${esc(r.version?.signed_by ?? "?")} · fingerprint ${esc(short(r.version?.version_hash))} · signers: ${esc((r.signers ?? []).map((s) => s.label).join(" | "))}</p></div>${cards}`;
   }).join("");
-  p.innerHTML = head + blocks;
+  const extra = Object.values(S.rulesets)
+    .filter((r) => r?.sop_id?.indexOf("SOP-CUSTOM-") === 0)
+    .map((r) => `<div class="policy"><h4>${esc(r.title)}</h4>
+      <p style="font-size:13.5px;color:var(--ink2);margin:4px 0">Encoded live during this demo - runs cases in the New case desk.</p>
+      <p class="meta">signed: ${esc(r.version?.signed_by ?? "?")} · fingerprint ${esc(short(r.version?.version_hash))} · signers: ${esc((r.signers ?? []).map((s) => s.label).join(" | "))}</p></div>`)
+    .join("");
+  p.innerHTML = head + blocks + extra;
   wireCases(p);
 }
 
@@ -950,14 +1122,14 @@ function renderGuard() {
 const PLAYBOOKS = [
   { key: "planned", title: "Planned exit - Lena retires on schedule",
     hours4: "Lena signs the succession pack; Maya and Tomas confirm their seats in writing; the signed record opens.",
-    hours48: "First cases decided under the inherited policies; weekly numbers reviewed; vendors learn successor names.",
+    hours48: "First cases decided under the inherited policies (EXP-01, ONB-01); weekly numbers reviewed (NUM-01); vendors learn successor names (COM-01).",
     elevated: "Maya decides operations up to $10,000; Tomas moves money inside policy. Neither can raise any limit.",
     full: "Routine restocks, payroll, standard pricing, approved payouts, clean intakes.",
     frozen: "New debt, price changes, hires above the line, discounts above the line - owner signature required.",
     ledger: "Pack signatures, then every decision chained in order. Nothing silent." },
   { key: "sudden", title: "Sudden disappearance - Lena unreachable today",
-    hours4: "Declare a 72-hour absence; Maya covers operations; payouts above $10,000 wait - no override exists to give.",
-    hours48: "Emergency weekly-numbers review; every vendor gets a successor name; undocumented processes inventoried.",
+    hours4: "Declare a 72-hour absence (SEAT-01); Maya covers operations; payouts above $10,000 wait - no override exists to give (see EXP-02).",
+    hours48: "Emergency weekly-numbers review (NUM-02); every vendor gets a successor name (COM-01); undocumented processes inventoried (DOC-02).",
     elevated: "Same $10,000 ceiling. Absence changes who decides, never how much anyone may move.",
     full: "Routine work, payroll, in-policy payouts, clean intakes with all checks green.",
     frozen: "Everything the policies mark owner-only stays frozen until a countersigned owner returns.",
@@ -1139,7 +1311,6 @@ function renderLedger() {
     ${entries.length === 0 ? "<p>Nothing recorded yet — sign the pack and decide the first case.</p>" :
     `<table class="ledger"><thead><tr><th>#</th><th>Date</th><th>Outcome</th><th>Action</th><th>Fingerprint</th></tr></thead><tbody>${rows}</tbody></table>`}`;
   wireLedgerTools();
-  $("footer").textContent = "Demonstration figures throughout — thresholds, names, and amounts stand in for a real client's own.";
 }
 
 document.addEventListener("change", (e) => {
@@ -1148,5 +1319,77 @@ document.addEventListener("change", (e) => {
   const id = box.dataset.case;
   if (S.decisions[id] && !S.decisions[id].result) S.decisions[id].stagedBy = role().key;
 });
+
+document.addEventListener("change", (e) => {
+  const box = e.target?.closest?.("input[type=checkbox][data-case]");
+  if (box) {
+    const id = box.dataset.case;
+    const cur = S.decisions[id] ?? { sigs: {} };
+    if (!cur.result) {
+      cur.staged = cur.staged ?? {};
+      cur.staged[box.dataset.sig] = role().key;
+      S.decisions[id] = cur;
+    }
+    return;
+  }
+  const nb = e.target?.closest?.("input[type=checkbox][data-nsig]");
+  if (nb) {
+    const st = newCaseState();
+    st.staged = st.staged ?? {};
+    st.staged[nb.dataset.nsig] = role().key;
+  }
+});
+
+const OWNER_PENS = ["ceo", "director", "controller", "owner"];
+
+function overrideCase(ov) {
+  const stamp = new Date().toISOString();
+  let rules;
+  if (ov === "new") {
+    const st = S.newCase;
+    if (!st?.result || st.result.status !== "ESCALATED") return;
+    rules = Object.values(S.rulesets).find((r) => r.sop_id === st.sop_id);
+    if (!rules) return;
+    st.sigs = st.sigs ?? {};
+    st.staged = st.staged ?? {};
+    for (const k of OWNER_PENS) { st.sigs[k] = true; st.staged[k] = "lena"; }
+    st.overridden = true;
+    appendDecision({
+      status: "SIGNED", sop_id: rules.sop_id, policy_title: rules.title,
+      action_id: `OVERRIDE-${rules.sop_id}`, actor_id: "lena-owner-override",
+      rule_version_hash: rules?.version?.version_hash ?? "unknown", timestamp: stamp,
+      derivation: [`Owner override signed by Lena: owner pens asserted over the escalated state.`],
+    });
+    decideNewCase(rules, st);
+    return;
+  }
+  const c = S.cases.find((x) => x.id === ov);
+  if (!c) return;
+  const d = S.decisions[ov] ?? {};
+  if (!d.result || d.result.status !== "ESCALATED") return;
+  rules = rulesFor(c);
+  if (!rules) return;
+  d.sigs = { ...(c.request?.signatures ?? {}), ...(d.sigs ?? {}) };
+  d.staged = d.staged ?? {};
+  for (const k of OWNER_PENS) { d.sigs[k] = true; d.staged[k] = "lena"; }
+  d.overridden = true;
+  S.decisions[ov] = d;
+  appendDecision({
+    status: "SIGNED", sop_id: rules.sop_id, policy_title: rules.title,
+    action_id: `OVERRIDE-${ov}`, actor_id: "lena-owner-override",
+    rule_version_hash: rules?.version?.version_hash ?? "unknown", timestamp: stamp,
+    derivation: [`Owner override signed by Lena: owner pens asserted over the escalated state.`],
+  });
+  decide(ov);
+}
+
+document.addEventListener("click", (e) => {
+  const b = e.target?.closest?.("[data-override]");
+  if (!b) return;
+  overrideCase(b.dataset.override);
+});
+
+// Test hooks for headless verification (no UI effect in browsers).
+export const __harness = { S, decide, decideNewCase, overrideCase, signHandover, doAmend, renderPanel };
 
 load();

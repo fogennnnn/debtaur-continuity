@@ -24,13 +24,15 @@ export const ROLES = [
     key: "maya",
     label: "Maya — operations lead, incoming manager",
     actor_id: "maya-ops",
+    pens: ["dept_head", "approver", "hiring_manager", "reapprover", "cover_owner", "executor", "onboarding", "sender", "reviewer", "process_owner", "requester"],
     blurb: "Runs the day-to-day. Holds department-head, approver, hiring-manager and purchase-approver pens.",
   },
   {
     key: "tomas",
     label: "Tomas — finance lead",
     actor_id: "tomas-finance",
-    blurb: "Holds the money pens: finance officer, payer, controller. Cannot approve policy — only execute inside it.",
+    pens: ["finance", "payer", "reviewer"],
+    blurb: "Holds the money pens: finance officer and payer. Cannot approve policy — only execute inside it.",
   },
 ];
 
